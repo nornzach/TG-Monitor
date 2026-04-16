@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title or 'TG Monitor Platform' }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h1>TG Monitor</h1>
+      <nav>
+        <a href="/">仪表盘</a>
+        <a href="/chats">群组/频道</a>
+        <a href="/messages">消息</a>
+        <a href="/settings">连接设置</a>
+      </nav>
+    </aside>
+    <main class="content">
+      {% if msg %}
+      <div class="flash flash-{{ level }}">{{ msg }}</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

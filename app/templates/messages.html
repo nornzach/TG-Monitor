@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>消息浏览</h2>
+<div class="panel">
+  <form method="get" class="filters">
+    <select name="chat_id">
+      <option value="">全部群组</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="关键词搜索">
+    <button type="submit">筛选</button>
+  </form>
+</div>
+<div class="panel row between">
+  <div>共 {{ total_count }} 条消息，第 {{ page }} / {{ total_pages }} 页</div>
+  <div class="pagination">
+    {% if has_prev %}
+    <a class="btn small" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&page={{ page - 1 }}">上一页</a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn small" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&page={{ page + 1 }}">下一页</a>
+    {% endif %}
+  </div>
+</div>
+<div class="panel">
+  <table>
+    <thead><tr><th>时间</th><th>群组</th><th>发送者</th><th>内容</th><th>媒体</th></tr></thead>
+    <tbody>
+      {% for row in messages %}
+      <tr>
+        <td>{{ row.message.message_date }}</td>
+        <td>{{ row.chat_title }}</td>
+        <td>{{ row.sender_name }}</td>
+        <td class="message-cell">{{ row.display_text or '' }}</td>
+        <td class="media-cell">
+          {% if row.media_items %}
+          <div class="media-grid">
+            {% for media in row.media_items %}
+              {% if media.media_url and media.media_is_image %}
+              <a href="{{ media.media_url }}" target="_blank" rel="noopener">
+                <img src="{{ media.media_url }}" alt="{{ media.media_name or media.media_type or 'image' }}" class="media-preview" loading="lazy">
+              </a>
+              {% elif media.media_url and media.media_is_video %}
+              <video controls preload="metadata" class="media-preview">
+                <source src="{{ media.media_url }}">
+              </video>
+              {% elif media.media_url %}
+              <a href="{{ media.media_url }}" target="_blank" rel="noopener">下载 {{ media.media_name or media.media_type or '媒体文件' }}</a>
+              {% elif media.media_type %}
+              <span>{{ media.media_type }}</span>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

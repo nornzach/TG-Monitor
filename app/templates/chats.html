@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row between">
+  <h2>群组/频道</h2>
+  <a class="btn" href="/sync/dialogs">同步 Telegram 对话列表</a>
+</div>
+<div class="panel">
+<table>
+  <thead><tr><th>ID</th><th>标题</th><th>用户名</th><th>类型</th><th>启用</th><th>最后消息时间</th><th>操作</th></tr></thead>
+  <tbody>
+    {% for chat in chats %}
+    <tr>
+      <td>{{ chat.telegram_id }}</td>
+      <td>{{ chat.title }}</td>
+      <td>{{ chat.username or '' }}</td>
+      <td>{{ chat.chat_type }}</td>
+      <td>{{ '是' if chat.is_active else '否' }}</td>
+      <td>{{ chat.last_message_at or '' }}</td>
+      <td class="actions">
+        <a class="btn small" href="/chats/{{ chat.id }}/toggle">{{ '停用' if chat.is_active else '启用' }}</a>
+        <a class="btn small" href="/chats/{{ chat.id }}/backfill">回填</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

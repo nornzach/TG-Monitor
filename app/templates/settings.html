@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>连接设置</h2>
+<div class="cards">
+  <div class="card"><div class="label">会话模式</div><div class="value small">{{ session_mode }}</div></div>
+  <div class="card"><div class="label">桌面 tdata</div><div class="value small">{{ tdata_path }}</div></div>
+  <div class="card"><div class="label">session 文件</div><div class="value small">{{ session_path }}</div></div>
+  <div class="card"><div class="label">当前状态</div><div class="value small">{{ '已连接' if telegram_connected else '未连接' }}</div></div>
+</div>
+<div class="grid-2">
+  <div class="panel">
+    <h3>尝试连接当前桌面会话</h3>
+    <a class="btn" href="/settings/connect">连接 / 导入桌面会话</a>
+    {% if telegram_connected and me %}
+      <p>当前账号：{{ me.id }} / {{ me.username or me.first_name }}</p>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <h3>手动登录（备用）</h3>
+    <p>仅当桌面会话导入失败时使用，需要你自己的 Telegram API ID / API HASH。</p>
+    <form action="/settings/manual-login" method="post" class="form-vertical">
+      <input type="text" name="phone" placeholder="手机号，例如 +8613xxxx">
+      <input type="text" name="code" placeholder="收到的验证码">
+      <input type="password" name="password" placeholder="二步验证密码（如有）">
+      <button type="submit">手动登录</button>
+    </form>
+    <p>API ID 已配置：{{ '是' if api_id_present else '否' }}，API HASH 已配置：{{ '是' if api_hash_present else '否' }}</p>
+  </div>
+</div>
+{% endblock %}

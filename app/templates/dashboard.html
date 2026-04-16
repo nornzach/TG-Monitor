@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>仪表盘</h2>
+<div class="cards">
+  <div class="card"><div class="label">群/频道总数</div><div class="value">{{ metrics.total_chats }}</div></div>
+  <div class="card"><div class="label">已启用监控</div><div class="value">{{ metrics.active_chats }}</div></div>
+  <div class="card"><div class="label">消息总数</div><div class="value">{{ metrics.total_messages }}</div></div>
+  <div class="card"><div class="label">24h 新消息</div><div class="value">{{ metrics.messages_24h }}</div></div>
+  <div class="card"><div class="label">发送者总数</div><div class="value">{{ metrics.total_users }}</div></div>
+</div>
+<div class="panel">
+  <h3>最近 14 天消息量</h3>
+  <div class="daily-chart">
+    {% set max_count = (metrics.daily_rows | map(attribute='count') | max) if metrics.daily_rows else 0 %}
+    {% for row in metrics.daily_rows %}
+    <div class="daily-chart-row">
+      <div class="daily-chart-label">{{ row.day }}</div>
+      <div class="daily-chart-bar-wrap">
+        <div class="daily-chart-bar" style="width: {{ ((row.count / max_count) * 100) if max_count else 0 }}%"></div>
+      </div>
+      <div class="daily-chart-value">{{ row.count }}</div>
+    </div>
+    {% else %}
+    <div class="empty-state">暂无数据</div>
+    {% endfor %}
+  </div>
+</div>
+<div class="grid-2">
+  <div class="panel">
+    <h3>最活跃群组</h3>
+    <table><thead><tr><th>群组</th><th>消息数</th></tr></thead><tbody>
+      {% for item in metrics.top_chats %}<tr><td>{{ item.title }}</td><td>{{ item.message_count }}</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+  <div class="panel">
+    <h3>高频发送者</h3>
+    <table><thead><tr><th>发送者</th><th>消息数</th></tr></thead><tbody>
+      {% for item in metrics.top_senders %}<tr><td>{{ item.sender }}</td><td>{{ item.message_count }}</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="panel">
+    <h3>高频关键词</h3>
+    <div class="keyword-list">{% for item in metrics.top_keywords %}<span>{{ item.keyword }} ({{ item.weight }})</span>{% endfor %}</div>
+  </div>
+  <div class="panel">
+    <h3>最近同步任务</h3>
+    <table><thead><tr><th>类型</th><th>状态</th><th>信息</th><th>时间</th></tr></thead><tbody>
+      {% for run in recent_runs %}<tr><td>{{ run.run_type }}</td><td>{{ run.status }}</td><td>{{ run.message or '' }}</td><td>{{ run.started_at }}</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+</div>
+{% endblock %}
