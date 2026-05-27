@@ -1,30 +1,327 @@
 {% extends "base.html" %}
+{% block title %}{{ t('settings.title') }} - TG Monitor{% endblock %}
 {% block content %}
-<h2>连接设置</h2>
+<div class="page-header">
+  <div>
+    <h2>{{ t('settings.title') }}</h2>
+    <div class="page-desc">{{ t('settings.desc') }}</div>
+  </div>
+</div>
+
 <div class="cards">
-  <div class="card"><div class="label">会话模式</div><div class="value small">{{ session_mode }}</div></div>
-  <div class="card"><div class="label">桌面 tdata</div><div class="value small">{{ tdata_path }}</div></div>
-  <div class="card"><div class="label">session 文件</div><div class="value small">{{ session_path }}</div></div>
-  <div class="card"><div class="label">当前状态</div><div class="value small">{{ '已连接' if telegram_connected else '未连接' }}</div></div>
-</div>
-<div class="grid-2">
-  <div class="panel">
-    <h3>尝试连接当前桌面会话</h3>
-    <a class="btn" href="/settings/connect">连接 / 导入桌面会话</a>
-    {% if telegram_connected and me %}
-      <p>当前账号：{{ me.id }} / {{ me.username or me.first_name }}</p>
-    {% endif %}
+  <div class="card">
+    <div class="card-icon {% if telegram_connected %}green{% else %}red{% endif %}">
+      {% if telegram_connected %}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      {% else %}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      {% endif %}
+    </div>
+    <div class="label">{{ t('settings.telegram_status') }}</div>
+    <div class="value small">
+      <span class="status-dot {{ 'online' if telegram_connected else 'offline' }}"></span>
+      {{ t('settings.connected') if telegram_connected else t('settings.disconnected') }}
+      {% if me %}
+      <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+        {{ me.id }}{% if me.username %} / @{{ me.username }}{% endif %}{% if me.first_name %} / {{ me.first_name }}{% endif %}
+      </div>
+      {% endif %}
+    </div>
   </div>
-  <div class="panel">
-    <h3>手动登录（备用）</h3>
-    <p>仅当桌面会话导入失败时使用，需要你自己的 Telegram API ID / API HASH。</p>
-    <form action="/settings/manual-login" method="post" class="form-vertical">
-      <input type="text" name="phone" placeholder="手机号，例如 +8613xxxx">
-      <input type="text" name="code" placeholder="收到的验证码">
-      <input type="password" name="password" placeholder="二步验证密码（如有）">
-      <button type="submit">手动登录</button>
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+    </div>
+    <div class="label">{{ t('settings.session_mode') }}</div>
+    <div class="value small">{{ session_mode }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    </div>
+    <div class="label">{{ t('settings.session_file') }}</div>
+    <div class="value small">{{ session_path }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon {% if ai_api_key_set %}green{% else %}red{% endif %}">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+    </div>
+    <div class="label">{{ t('settings.ai_config_status') }}</div>
+    <div class="value small">
+      <span class="status-dot {{ 'online' if ai_api_key_set else 'offline' }}"></span>
+      {{ t('settings.configured') if ai_api_key_set else t('settings.not_configured') }}
+      <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">{{ ai_model }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--blue-bg); color: var(--blue);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+    </div>
+    <h3>{{ t('settings.telegram_login') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <div class="grid-2" style="margin-bottom: 0;">
+      <div>
+        <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 16px;">
+          {{ t('settings.login_desc') }}
+        </p>
+        <form action="/settings/manual-login" method="post" class="form-vertical">
+          <div class="form-group">
+            <label>{{ t('settings.phone_number') }}</label>
+            <input type="text" name="phone" placeholder="+8613xxxxxxxxx" value="{{ pending_manual_login_phone or '' }}" required>
+          </div>
+          <div class="form-group">
+            <label>{{ t('settings.verification_code') }}</label>
+            <input type="text" name="code" placeholder="{{ t('settings.verification_code') }}">
+          </div>
+          <div class="form-group">
+            <label>{{ t('settings.two_factor_password') }}</label>
+            <input type="password" name="password" placeholder="{{ t('settings.two_factor_password') }}">
+          </div>
+          <button type="submit">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            {{ t('settings.submit_code') if pending_manual_login_phone else t('settings.send_code') }}
+          </button>
+        </form>
+      </div>
+      <div>
+        <div style="padding: 16px; background: var(--surface-alt); border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px;">{{ t('settings.connection_info') }}</div>
+          <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: var(--text-muted);">{{ t('settings.session_path') }}</span>
+              <code style="font-size: 11px; color: var(--text-secondary); word-break: break-all; max-width: 200px; text-align: right;">{{ session_path }}</code>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: var(--text-muted);">{{ t('settings.tdata_path') }}</span>
+              <code style="font-size: 11px; color: var(--text-secondary); word-break: break-all; max-width: 200px; text-align: right;">{{ tdata_path }}</code>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: var(--text-muted);">{{ t('settings.api_id') }}</span>
+              <span class="badge {{ 'badge-green' if api_id_present else 'badge-red' }}">{{ t('settings.configured') if api_id_present else t('settings.not_configured') }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <span style="color: var(--text-muted);">{{ t('settings.api_hash') }}</span>
+              <span class="badge {{ 'badge-green' if api_hash_present else 'badge-red' }}">{{ t('settings.configured') if api_hash_present else t('settings.not_configured') }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--green-bg); color: var(--green);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </div>
+    <h3>{{ t('settings.collection_config') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <form action="/settings/runtime-config" method="post" class="form-vertical">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
+        <label class="checkbox-label">
+          <input type="checkbox" name="background_collection_enabled" value="true" {% if background_collection_enabled %}checked{% endif %}>
+          {{ t('settings.background_collection') }}
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="live_listener_enabled" value="true" {% if live_listener_enabled %}checked{% endif %}>
+          {{ t('settings.live_listener') }}
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="download_media_enabled" value="true" {% if download_media_enabled %}checked{% endif %}>
+          {{ t('settings.download_media') }}
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="fetch_user_about_enabled" value="true" {% if fetch_user_about_enabled %}checked{% endif %}>
+          {{ t('settings.fetch_user_about') }}
+        </label>
+      </div>
+
+      <div class="grid-3">
+        <div class="form-group">
+          <label>{{ t('settings.sync_interval') }}</label>
+          <input type="number" name="sync_interval_minutes" min="1" max="1440" value="{{ sync_interval_minutes }}">
+          <span class="help-text">{{ t('settings.sync_interval_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.batch_size') }}</label>
+          <input type="number" name="sync_batch_size" min="20" max="1000" value="{{ sync_batch_size }}">
+          <span class="help-text">{{ t('settings.batch_size_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.lookback_messages') }}</label>
+          <input type="number" name="sync_lookback_messages" min="100" max="10000" value="{{ sync_lookback_messages }}">
+          <span class="help-text">{{ t('settings.lookback_desc') }}</span>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label>{{ t('settings.ai_summary_batch_size') }}</label>
+          <input type="number" name="ai_summary_batch_size" min="20" max="1000" value="{{ ai_summary_batch_size }}">
+          <span class="help-text">{{ t('settings.ai_summary_batch_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.ai_timeout') }}</label>
+          <input type="number" name="ai_summary_running_timeout_minutes" min="5" max="1440" value="{{ ai_summary_running_timeout_minutes }}">
+          <span class="help-text">{{ t('settings.ai_timeout_desc') }}</span>
+        </div>
+      </div>
+
+      <button type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        {{ t('settings.save_collection') }}
+      </button>
     </form>
-    <p>API ID 已配置：{{ '是' if api_id_present else '否' }}，API HASH 已配置：{{ '是' if api_hash_present else '否' }}</p>
   </div>
 </div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--primary-light); color: var(--primary);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+    </div>
+    <h3>{{ t('settings.ai_config') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 16px;">
+      {{ t('settings.ai_config_desc', count=ai_summary_batch_size) }}
+    </p>
+    <form action="/settings/ai-config" method="post" class="form-vertical">
+      <div class="form-group">
+        <label>{{ t('settings.ai_provider') }}</label>
+        <select name="ai_provider" id="ai-provider-select" onchange="onProviderChange(this.value)">
+          {% for key, cfg in ai_providers.items() %}
+          <option value="{{ key }}" {% if ai_provider == key %}selected{% endif %}>{{ cfg.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="help-text">{{ t('settings.ai_provider_desc') }}</span>
+      </div>
+      <div class="grid-2">
+        <div class="form-group">
+          <label>{{ t('settings.api_key') }}</label>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="password" name="ai_api_key" placeholder="sk-..." value="{{ '••••••••' if ai_api_key_set else '' }}" style="flex: 1;">
+            <span class="badge {{ 'badge-green' if ai_api_key_set else 'badge-red' }}">{{ t('settings.configured') if ai_api_key_set else t('settings.not_configured') }}</span>
+          </div>
+          <span class="help-text">{{ t('settings.api_key_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.model_name') }}</label>
+          <input type="text" name="ai_model" id="ai-model-input" value="{{ ai_model }}" placeholder="{{ t('settings.model_name') }}">
+          <span class="help-text">{{ t('settings.model_desc') }}</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>{{ t('settings.api_base_url') }}</label>
+        <input type="text" name="ai_base_url" id="ai-base-url-input" value="{{ ai_base_url }}" placeholder="https://api.deepseek.com/v1">
+        <span class="help-text">{{ t('settings.api_base_desc') }}</span>
+      </div>
+      <button type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        {{ t('settings.save_ai') }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--amber-bg); color: var(--amber);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </div>
+    <h3>{{ t('settings.app_settings') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <form action="/settings/app-config" method="post" class="form-vertical">
+      <div class="grid-2">
+        <div class="form-group">
+          <label>{{ t('settings.app_name') }}</label>
+          <input type="text" name="app_name" value="{{ app_name }}" placeholder="TG Monitor Platform">
+          <span class="help-text">{{ t('settings.app_name_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.listen_host') }}</label>
+          <input type="text" name="app_host" value="{{ app_host }}" placeholder="127.0.0.1">
+          <span class="help-text">{{ t('settings.listen_host_desc') }}</span>
+        </div>
+      </div>
+      <div class="grid-3">
+        <div class="form-group">
+          <label>{{ t('settings.listen_port') }}</label>
+          <input type="number" name="app_port" min="1" max="65535" value="{{ app_port }}">
+          <span class="help-text">{{ t('settings.listen_port_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.dashboard_keywords') }}</label>
+          <input type="number" name="analysis_top_keywords" min="5" max="100" value="{{ analysis_top_keywords }}">
+          <span class="help-text">{{ t('settings.dashboard_keywords_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.media_storage_path') }}</label>
+          <input type="text" name="media_storage_path" value="{{ media_storage_path }}" placeholder="./data/media">
+          <span class="help-text">{{ t('settings.media_storage_desc') }}</span>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>{{ t('settings.extra_stopwords') }}</label>
+        <input type="text" name="stopwords_extra" value="{{ stopwords_extra }}" placeholder="api,gpt,telegram">
+        <span class="help-text">{{ t('settings.stopwords_desc') }}</span>
+      </div>
+      <button type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        {{ t('settings.save_app') }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--surface-alt); color: var(--text-secondary);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+    </div>
+    <h3>{{ t('settings.database_info') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;">
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.host') }}</div>
+        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_host }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.port') }}</div>
+        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_port }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.database') }}</div>
+        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_name }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var providerDefaults = {
+  {% for key, cfg in ai_providers.items() %}
+  '{{ key }}': { base_url: '{{ cfg.base_url }}', model: '{{ cfg.default_model }}' },
+  {% endfor %}
+};
+
+function onProviderChange(provider) {
+  var defaults = providerDefaults[provider];
+  if (!defaults) return;
+  var urlInput = document.getElementById('ai-base-url-input');
+  var modelInput = document.getElementById('ai-model-input');
+  if (urlInput && defaults.base_url) urlInput.value = defaults.base_url;
+  if (modelInput && defaults.model) modelInput.value = defaults.model;
+}
+</script>
 {% endblock %}

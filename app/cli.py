@@ -11,7 +11,7 @@ from .telegram_client import telegram_session_manager
 
 
 async def import_desktop_session() -> None:
-    client = await telegram_session_manager.connect()
+    client = await telegram_session_manager.connect(allow_desktop_import=True)
     if not client:
         raise RuntimeError('failed to connect using desktop session')
     me = await client.get_me()

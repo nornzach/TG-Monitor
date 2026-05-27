@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ t('products.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('products.title') }}</h2>
+    <div class="page-desc">{{ t('products.desc') }}</div>
+  </div>
+</div>
+
+<div class="filter-tabs">
+  <a href="/products" class="filter-tab {% if not selected_status %}active{% endif %}">
+    {{ t('common.all') }} <span class="badge">{{ total_count }}</span>
+  </a>
+  {% for s in order %}
+  <a href="/products?status={{ s }}" class="filter-tab {% if selected_status == s %}active{% endif %}">
+    {{ labels[s] }} <span class="badge">{{ counts[s] }}</span>
+  </a>
+  {% endfor %}
+</div>
+
+<div style="margin-bottom: 16px;">
+  <select onchange="if(this.value) window.location='/products?status={{ selected_status or '' }}&chat_id='+this.value; else window.location='/products?status={{ selected_status or '' }}';" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font-size: 13px;">
+    <option value="">{{ t('messages.chat_filter') }}</option>
+    {% for chat in chats %}
+    <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if has_prev %}<a href="/products?page={{ page - 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+  {% if has_next %}<a href="/products?page={{ page + 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+</div>
+{% endif %}
+
+{% if products %}
+<div class="items-list">
+  {% for product in products %}
+  <div class="item-card">
+    <div class="item-header">
+      <div class="item-title">{{ product.product_name }}</div>
+      <div class="item-badges">
+        {% if product.status == 'available' %}
+        <span class="badge badge-green">{{ labels.get(product.status, product.status) }}</span>
+        {% elif product.status == 'sold' %}
+        <span class="badge badge-red">{{ labels.get(product.status, product.status) }}</span>
+        {% else %}
+        <span class="badge badge-amber">{{ labels.get(product.status, product.status) }}</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="item-details">
+      {% if product.price_amount is not none %}
+      <div class="item-price">
+        <span class="price-amount">{{ product.price_amount }}</span>
+        <span class="price-currency">{{ product.price_currency }}</span>
+      </div>
+      {% else %}
+      <div class="item-price" style="color: var(--text-muted);">{{ t('products.price_unknown') }}</div>
+      {% endif %}
+      {% if product.seller_contact %}
+      <div class="item-seller">
+        <span style="color: var(--text-muted);">{{ t('products.seller') }}:</span> {{ product.seller_contact }}
+      </div>
+      {% endif %}
+    </div>
+    <div class="item-meta">
+      <span>{{ t('products.first_seen') }}: {{ product.first_seen_at | to_beijing('%Y-%m-%d %H:%M') }}</span>
+      <span>{{ t('products.last_seen') }}: {{ product.last_seen_at | to_beijing('%Y-%m-%d %H:%M') }}</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+  <p>{{ t('products.no_products') }}</p>
+  <p style="font-size: 13px; color: var(--text-muted);">{{ t('products.no_products_desc') }}</p>
+</div>
+{% endif %}
+
+{% if total_pages > 1 %}
+<div class="pagination" style="margin-top: 16px;">
+  {% if has_prev %}<a href="/products?page={{ page - 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+  {% if has_next %}<a href="/products?page={{ page + 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

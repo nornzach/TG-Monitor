@@ -6,10 +6,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+build/
+dist/
 
-# Virtual env
+# Virtual environments
 .venv/
 venv/
+env/
 
 # Environment / secrets
 .env
@@ -17,20 +21,36 @@ venv/
 !.env.example
 
 # Local data
-/data/media/
-/data/*.db
-/data/*.sqlite
-/data/*.sqlite3
-/data/*.session
-/data/*.session-journal
-/data/*.log
+data/
+!data/.gitkeep
 
-# OS / editor
+# Session files
+*.session
+*.session-journal
+*.session-wal
+*.session-shm
+*.session.meta.json
+
+# Logs
+*.log
+app.log
+
+# Test / dev scripts
+test_*.py
+
+# OS
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
 
-# Build artifacts
-build/
-dist/
-*.egg-info/
+# Claude Code
+.claude/

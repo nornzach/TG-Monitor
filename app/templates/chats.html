@@ -1,28 +1,124 @@
 {% extends "base.html" %}
+{% block title %}{{ t('chats.title') }} - TG Monitor{% endblock %}
 {% block content %}
-<div class="row between">
-  <h2>群组/频道</h2>
-  <a class="btn" href="/sync/dialogs">同步 Telegram 对话列表</a>
+<div class="page-header">
+  <div>
+    <h2>{{ t('chats.title') }}</h2>
+    <div class="page-desc">{{ t('chats.desc') }}</div>
+  </div>
+  <div class="page-actions">
+    <form action="/sync/dialogs" method="post" style="display: inline;">
+      <button class="btn btn-primary" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        {{ t('chats.sync_dialogs') }}
+      </button>
+    </form>
+  </div>
 </div>
+
+<div class="panel" id="batch-bar" style="display: none; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 16px; background: var(--primary-light); border-color: rgba(79,70,229,0.2);">
+  <span style="font-size: 13px; color: var(--primary); font-weight: 600;">
+    <span id="selected-count">0</span> {{ t('common.selected_count', count='') }}
+  </span>
+  <div style="display: flex; gap: 6px; margin-left: auto;">
+    <button class="btn btn-sm btn-primary" onclick="batchToggle('enable')">{{ t('common.batch_enable') }}</button>
+    <button class="btn btn-sm btn-danger" onclick="batchToggle('disable')">{{ t('common.batch_disable') }}</button>
+    <span style="width: 1px; background: var(--border); margin: 0 4px;"></span>
+    <button class="btn btn-sm btn-secondary" onclick="toggleAll('enable')">{{ t('common.enable_all') }}</button>
+    <button class="btn btn-sm btn-danger" onclick="toggleAll('disable')">{{ t('common.disable_all') }}</button>
+  </div>
+</div>
+
 <div class="panel">
-<table>
-  <thead><tr><th>ID</th><th>标题</th><th>用户名</th><th>类型</th><th>启用</th><th>最后消息时间</th><th>操作</th></tr></thead>
-  <tbody>
-    {% for chat in chats %}
-    <tr>
-      <td>{{ chat.telegram_id }}</td>
-      <td>{{ chat.title }}</td>
-      <td>{{ chat.username or '' }}</td>
-      <td>{{ chat.chat_type }}</td>
-      <td>{{ '是' if chat.is_active else '否' }}</td>
-      <td>{{ chat.last_message_at or '' }}</td>
-      <td class="actions">
-        <a class="btn small" href="/chats/{{ chat.id }}/toggle">{{ '停用' if chat.is_active else '启用' }}</a>
-        <a class="btn small" href="/chats/{{ chat.id }}/backfill">回填</a>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+  {% if chats %}
+  <form id="chat-form" method="post">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 36px;"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" style="accent-color: var(--primary);"></th>
+          <th>ID</th>
+          <th>{{ t('chats.chat_title') }}</th>
+          <th>{{ t('chats.username') }}</th>
+          <th>{{ t('chats.chat_type') }}</th>
+          <th>{{ t('chats.chat_status') }}</th>
+          <th>{{ t('chats.last_message_time') }}</th>
+          <th>{{ t('common.operation') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for chat in chats %}
+        <tr>
+          <td><input type="checkbox" name="chat_ids" value="{{ chat.id }}" class="chat-checkbox" onchange="updateBatchBar()" style="accent-color: var(--primary);"></td>
+          <td><code style="font-size: 12px; color: var(--text-muted);">{{ chat.telegram_id }}</code></td>
+          <td><strong>{{ chat.title }}</strong></td>
+          <td>{% if chat.username %}<code style="color: var(--primary);">@{{ chat.username }}</code>{% else %}<span style="color: var(--text-muted);">-</span>{% endif %}</td>
+          <td><span class="badge badge-blue">{{ chat.chat_type }}</span></td>
+          <td>
+            {% if chat.is_active %}
+            <span class="badge badge-green">{{ t('common.enabled') }}</span>
+            {% else %}
+            <span class="badge badge-red">{{ t('common.disabled') }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">{% if chat.last_message_at %}{{ chat.last_message_at | to_beijing }}{% else %}-{% endif %}</td>
+          <td class="actions">
+            <a class="btn btn-xs btn-secondary" href="/chats/{{ chat.id }}">{{ t('common.detail') }}</a>
+            <button class="btn btn-xs {{ 'btn-danger' if chat.is_active else 'btn-primary' }}" type="submit" formaction="/chats/{{ chat.id }}/toggle">
+              {{ t('chats.disable') if chat.is_active else t('chats.enable') }}
+            </button>
+            <button class="btn btn-xs btn-secondary" type="submit" formaction="/chats/{{ chat.id }}/backfill">{{ t('common.backfill') }}</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </form>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">💬</div>
+    <div class="empty-title">{{ t('chats.no_chats') }}</div>
+    <div class="empty-desc">{{ t('chats.no_chats_desc') }}</div>
+  </div>
+  {% endif %}
 </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleSelectAll(source) {
+  document.querySelectorAll('.chat-checkbox').forEach(function(cb) { cb.checked = source.checked; });
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  var checked = document.querySelectorAll('.chat-checkbox:checked').length;
+  var bar = document.getElementById('batch-bar');
+  document.getElementById('selected-count').textContent = checked;
+  bar.style.display = checked > 0 ? 'flex' : 'none';
+}
+
+function batchToggle(action) {
+  var form = document.getElementById('chat-form');
+  form.action = '/chats/batch-toggle';
+  var input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'action';
+  input.value = action;
+  form.appendChild(input);
+  form.submit();
+}
+
+function toggleAll(action) {
+  var form = document.getElementById('chat-form');
+  form.action = '/chats/toggle-all';
+  var input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'action';
+  input.value = action;
+  form.appendChild(input);
+  document.querySelectorAll('.chat-checkbox').forEach(function(cb) { cb.checked = true; });
+  form.submit();
+}
+</script>
 {% endblock %}

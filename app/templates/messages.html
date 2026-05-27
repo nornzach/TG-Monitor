@@ -1,63 +1,146 @@
 {% extends "base.html" %}
+{% block title %}{{ t('messages.title') }} - TG Monitor{% endblock %}
 {% block content %}
-<h2>消息浏览</h2>
+<div class="page-header">
+  <div>
+    <h2>{{ t('messages.title') }}</h2>
+    <div class="page-desc">{{ t('messages.desc') }}</div>
+  </div>
+</div>
+
 <div class="panel">
   <form method="get" class="filters">
-    <select name="chat_id">
-      <option value="">全部群组</option>
+    <select name="chat_id" style="min-width: 160px;">
+      <option value="">{{ t('messages.chat_filter') }}</option>
       {% for chat in chats %}
       <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
       {% endfor %}
     </select>
-    <input type="text" name="keyword" value="{{ keyword }}" placeholder="关键词搜索">
-    <button type="submit">筛选</button>
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('messages.search_placeholder') }}" style="min-width: 200px;">
+    <input type="text" name="sender" value="{{ sender }}" placeholder="{{ t('messages.sender_placeholder') }}" style="min-width: 120px;">
+    <label class="checkbox-label" style="margin: 0;">
+      <input type="checkbox" name="media_only" value="true" {% if media_only %}checked{% endif %}>
+      {{ t('messages.with_media') }}
+    </label>
+    <button class="btn-primary" type="submit">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      {{ t('common.filter') }}
+    </button>
+    {% if selected_chat_id or keyword or media_only or sender %}
+    <a class="btn btn-secondary" href="/messages">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      {{ t('common.clear') }}
+    </a>
+    {% endif %}
   </form>
 </div>
-<div class="panel row between">
-  <div>共 {{ total_count }} 条消息，第 {{ page }} / {{ total_pages }} 页</div>
+
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+  <div style="font-size: 13px; color: var(--text-secondary);">
+    {{ t('common.total_messages', count=total_count) }}
+    {% if selected_chat_id or keyword or media_only or sender %}{{ t('common.filtered') }}{% endif %}
+  </div>
+  {% if total_pages > 1 %}
   <div class="pagination">
+    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
     {% if has_prev %}
-    <a class="btn small" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&page={{ page - 1 }}">上一页</a>
+    <a class="btn btn-sm btn-secondary" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&sender={{ sender }}&media_only={{ 'true' if media_only else '' }}&page={{ page - 1 }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      {{ t('common.prev') }}
+    </a>
     {% endif %}
     {% if has_next %}
-    <a class="btn small" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&page={{ page + 1 }}">下一页</a>
+    <a class="btn btn-sm btn-secondary" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&sender={{ sender }}&media_only={{ 'true' if media_only else '' }}&page={{ page + 1 }}">
+      {{ t('common.next') }}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="msg-feed">
+  {% for row in messages %}
+  <div class="msg-card">
+    <div class="msg-avatar" style="background: {{ ['#4f8ef7','#22c55e','#f59e0b','#a855f7','#ec4899','#14b8a6','#f97316','#6366f1'][loop.index0 % 8] }};">
+      {{ row.sender_name[0:1] | upper }}
+    </div>
+    <div class="msg-content">
+      <div class="msg-header">
+        <span class="msg-sender">{{ row.sender_name }}</span>
+        <span class="msg-chat">{{ row.chat_title }}</span>
+        <span class="msg-time">{{ row.message.message_date | to_beijing('%m-%d %H:%M') }}</span>
+      </div>
+      <div class="msg-body">
+        {% if row.display_text %}
+        <div class="msg-text">{{ row.display_text }}</div>
+        {% else %}
+        <div class="msg-text msg-text-empty">{{ t('common.no_text') }}</div>
+        {% endif %}
+        {% if row.media_items %}
+        <div class="msg-media">
+          {% for media in row.media_items %}
+            {% if media.media_url and media.media_is_image %}
+            <a href="{{ media.media_url }}" target="_blank" rel="noopener" class="msg-media-item">
+              <img src="{{ media.media_url }}" alt="{{ media.media_name or 'image' }}" loading="lazy">
+            </a>
+            {% elif media.media_url and media.media_is_video %}
+            <a href="{{ media.media_url }}" target="_blank" rel="noopener" class="msg-media-item msg-media-video">
+              <video controls preload="metadata">
+                <source src="{{ media.media_url }}">
+              </video>
+              <div class="msg-media-play">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </div>
+            </a>
+            {% elif media.media_url %}
+            <a class="msg-media-file" href="{{ media.media_url }}" target="_blank" rel="noopener">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span>{{ media.media_name or media.media_type or t('messages.file') }}</span>
+            </a>
+            {% elif media.media_type %}
+            <span class="msg-media-file msg-media-type">{{ media.media_type }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="panel">
+    <div class="empty-state">
+      <div class="empty-icon">📨</div>
+      {% if selected_chat_id or keyword or media_only or sender %}
+      <div class="empty-title">{{ t('messages.no_match') }}</div>
+      <div class="empty-desc">{{ t('messages.no_match_desc') }}</div>
+      {% else %}
+      <div class="empty-title">{{ t('messages.no_messages') }}</div>
+      <div class="empty-desc">{{ t('messages.no_messages_desc') }}</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+  <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_messages', count=total_count) }}</div>
+  <div class="pagination">
+    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+    {% if has_prev %}
+    <a class="btn btn-sm btn-secondary" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&sender={{ sender }}&media_only={{ 'true' if media_only else '' }}&page={{ page - 1 }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      {{ t('common.prev') }}
+    </a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn btn-sm btn-secondary" href="/messages?chat_id={{ selected_chat_id or '' }}&keyword={{ keyword }}&sender={{ sender }}&media_only={{ 'true' if media_only else '' }}&page={{ page + 1 }}">
+      {{ t('common.next') }}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
     {% endif %}
   </div>
 </div>
-<div class="panel">
-  <table>
-    <thead><tr><th>时间</th><th>群组</th><th>发送者</th><th>内容</th><th>媒体</th></tr></thead>
-    <tbody>
-      {% for row in messages %}
-      <tr>
-        <td>{{ row.message.message_date }}</td>
-        <td>{{ row.chat_title }}</td>
-        <td>{{ row.sender_name }}</td>
-        <td class="message-cell">{{ row.display_text or '' }}</td>
-        <td class="media-cell">
-          {% if row.media_items %}
-          <div class="media-grid">
-            {% for media in row.media_items %}
-              {% if media.media_url and media.media_is_image %}
-              <a href="{{ media.media_url }}" target="_blank" rel="noopener">
-                <img src="{{ media.media_url }}" alt="{{ media.media_name or media.media_type or 'image' }}" class="media-preview" loading="lazy">
-              </a>
-              {% elif media.media_url and media.media_is_video %}
-              <video controls preload="metadata" class="media-preview">
-                <source src="{{ media.media_url }}">
-              </video>
-              {% elif media.media_url %}
-              <a href="{{ media.media_url }}" target="_blank" rel="noopener">下载 {{ media.media_name or media.media_type or '媒体文件' }}</a>
-              {% elif media.media_type %}
-              <span>{{ media.media_type }}</span>
-              {% endif %}
-            {% endfor %}
-          </div>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+{% endif %}
 {% endblock %}

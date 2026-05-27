@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}{{ t('summaries.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('summaries.title') }}</h2>
+    <div class="page-desc">{{ t('summaries.desc') }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" class="filters">
+    <select name="chat_id" style="min-width: 160px;">
+      <option value="">{{ t('summaries.chat_filter') }}</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_chat_id %}
+    <a class="btn btn-secondary" href="/summaries">{{ t('common.clear') }}</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if total_pages > 1 %}
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+  <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
+  <div class="pagination">
+    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+    {% if has_prev %}
+    <a class="btn btn-sm btn-secondary" href="/summaries?chat_id={{ selected_chat_id or '' }}&page={{ page - 1 }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      {{ t('common.prev') }}
+    </a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn btn-sm btn-secondary" href="/summaries?chat_id={{ selected_chat_id or '' }}&page={{ page + 1 }}">
+      {{ t('common.next') }}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% for s in summaries %}
+<div class="summary-card">
+  <div class="summary-header">
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <span class="badge {% if s.status == 'success' %}badge-green{% elif s.status == 'running' %}badge-amber{% elif s.status == 'failed' %}badge-red{% else %}badge-blue{% endif %}">
+        {% if s.status == 'success' %}{{ t('common.success') }}{% elif s.status == 'running' %}{{ t('common.running') }}{% elif s.status == 'failed' %}{{ t('common.failed') }}{% else %}{{ t('common.pending') }}{% endif %}
+      </span>
+      <strong style="font-size: 14px;">{{ chat_map.get(s.chat_id, t('common.unknown')) }}</strong>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 12px; color: var(--text-muted);">
+        {{ s.message_count }} {{ t('summaries.message_count') }}
+        {% if s.triggered_at %} · {{ s.triggered_at | to_beijing }}{% endif %}
+      </span>
+      <div style="display: flex; gap: 4px;">
+        <form action="/summaries/{{ s.id }}/rerun" method="post" style="display: inline;">
+          <button class="btn btn-xs btn-secondary" type="submit" title="{{ t('summaries.rerun') }}">{{ t('summaries.rerun') }}</button>
+        </form>
+        <form action="/summaries/{{ s.id }}/delete" method="post" style="display: inline;" onsubmit="return confirm('{{ t('summaries.confirm_delete') }}');">
+          <button class="btn btn-xs btn-danger" type="submit" title="{{ t('summaries.delete') }}">{{ t('summaries.delete') }}</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {% if s.status == 'success' %}
+    {% if s.summary_text %}
+    <div class="summary-body">{{ s.summary_text }}</div>
+    {% endif %}
+
+    {% set urls = s.extracted_urls or {} %}
+
+    {% if urls.top_senders %}
+    <div style="margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+      <span style="font-size: 12px; color: var(--text-muted); font-weight: 600;">{{ t('summaries.top_senders') }}：</span>
+      {% for sender in urls.top_senders %}
+      <span class="badge badge-blue">{{ sender }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if urls.media_summary %}
+    <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted); padding: 8px 12px; background: var(--surface-alt); border-radius: var(--radius-sm);">
+      {{ urls.media_summary }}
+    </div>
+    {% endif %}
+
+    <div style="margin-top: 10px;">
+      <a href="/urls" style="font-size: 12px; color: var(--primary);">{{ t('summaries.view_urls') }}</a>
+    </div>
+
+  {% elif s.status == 'failed' and s.error_message %}
+    <div style="color: var(--red-text); font-size: 13px; padding: 10px 14px; background: var(--red-bg); border-radius: var(--radius-sm); border: 1px solid var(--red-border);">
+      {{ s.error_message }}
+    </div>
+  {% elif s.status == 'running' %}
+    <div style="color: var(--amber-text); font-size: 13px; padding: 10px 14px; background: var(--amber-bg); border-radius: var(--radius-sm); border: 1px solid var(--amber-border);">
+      {{ t('summaries.analyzing') }}
+    </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">🤖</div>
+    <div class="empty-title">{{ t('summaries.no_summaries') }}</div>
+    <div class="empty-desc">{{ t('summaries.no_summaries_desc', count=ai_summary_batch_size if ai_summary_batch_size is defined else '100') }}</div>
+  </div>
+</div>
+{% endfor %}
+
+{% if total_pages > 1 %}
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+  <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
+  <div class="pagination">
+    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+    {% if has_prev %}
+    <a class="btn btn-sm btn-secondary" href="/summaries?chat_id={{ selected_chat_id or '' }}&page={{ page - 1 }}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      {{ t('common.prev') }}
+    </a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn btn-sm btn-secondary" href="/summaries?chat_id={{ selected_chat_id or '' }}&page={{ page + 1 }}">
+      {{ t('common.next') }}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

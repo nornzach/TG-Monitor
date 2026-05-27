@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ t('status.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('status.title') }}</h2>
+    <div class="page-desc">{{ t('status.desc') }}</div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    </div>
+    <div class="label">{{ t('status.monitoring_groups') }}</div>
+    <div class="value">{{ status.active_chats }}<span style="font-size: 14px; color: var(--text-muted);"> / {{ status.total_chats }}</span></div>
+  </div>
+  <div class="card">
+    <div class="card-icon green">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </div>
+    <div class="label">{{ t('status.total_messages') }}</div>
+    <div class="value">{{ status.total_messages }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/></svg>
+    </div>
+    <div class="label">{{ t('status.messages_24h') }}</div>
+    <div class="value">{{ status.messages_24h }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon purple">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    </div>
+    <div class="label">{{ t('status.user_count') }}</div>
+    <div class="value">{{ status.total_users }}</div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--green-bg); color: var(--green);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </div>
+    <h3>{{ t('status.sync_status') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;">
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.running_syncs') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: {{ 'var(--green)' if status.running_syncs == 0 else 'var(--amber)' }};">{{ status.running_syncs }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.success_syncs_24h') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: var(--green);">{{ status.success_syncs_24h }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.failed_syncs_24h') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: {{ 'var(--green)' if status.failed_syncs_24h == 0 else 'var(--red)' }};">{{ status.failed_syncs_24h }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.last_success') }}</div>
+        <div style="font-size: 13px; color: var(--text-secondary);">{{ status.last_success_at | to_beijing('%Y-%m-%d %H:%M') if status.last_success_at else '-' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--primary-light); color: var(--primary);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+    </div>
+    <h3>{{ t('status.ai_status') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;">
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.total_summaries') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);">{{ status.total_summaries }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.total_urls') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: var(--text-primary);">{{ status.total_urls }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.running_summaries') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: {{ 'var(--green)' if status.running_summaries == 0 else 'var(--amber)' }};">{{ status.running_summaries }}</div>
+      </div>
+      <div>
+        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('status.failed_summaries') }}</div>
+        <div style="font-size: 24px; font-weight: 700; color: {{ 'var(--green)' if status.failed_summaries == 0 else 'var(--red)' }};">{{ status.failed_summaries }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if status.recent_errors %}
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--red-bg); color: var(--red);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    </div>
+    <h3>{{ t('status.recent_errors') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('status.error_id') }}</th>
+          <th>{{ t('status.error_time') }}</th>
+          <th>{{ t('status.error_message') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for err in status.recent_errors %}
+        <tr>
+          <td><code style="font-size: 12px;">#{{ err.id }}</code></td>
+          <td style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">{{ err.started_at | to_beijing }}</td>
+          <td style="color: var(--red-text); font-size: 13px;">{{ err.message or t('status.unknown_error') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

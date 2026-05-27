@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}{{ chat.title }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ chat.title }}</h2>
+    <div class="page-desc">
+      {% if chat.username %}@{{ chat.username }} · {% endif %}
+      {{ chat.chat_type }} · Telegram ID: <code>{{ chat.telegram_id }}</code>
+    </div>
+  </div>
+  <div class="page-actions">
+    <form action="/chats/{{ chat.id }}/sync" method="post" style="display: inline;">
+      <button class="btn btn-primary" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        {{ t('chat_detail.manual_sync') }}
+      </button>
+    </form>
+    <form action="/chats/{{ chat.id }}/summarize" method="post" style="display: inline;">
+      <button class="btn btn-secondary" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+        {{ t('chat_detail.trigger_ai') }}
+      </button>
+    </form>
+    <form action="/chats/{{ chat.id }}/toggle" method="post" style="display: inline;">
+      <button class="btn {{ 'btn-danger' if chat.is_active else 'btn-primary' }}" type="submit">
+        {{ t('chat_detail.disable_monitoring') if chat.is_active else t('chat_detail.enable_monitoring') }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </div>
+    <div class="label">{{ t('chat_detail.total_messages') }}</div>
+    <div class="value">{{ stats.total_messages }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/></svg>
+    </div>
+    <div class="label">{{ t('chat_detail.messages_24h') }}</div>
+    <div class="value">{{ stats.messages_24h }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </div>
+    <div class="label">{{ t('chat_detail.media_count') }}</div>
+    <div class="value">{{ stats.media_count }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon purple">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    </div>
+    <div class="label">{{ t('chat_detail.unique_senders') }}</div>
+    <div class="value">{{ stats.unique_senders }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon" style="background: var(--primary-light); color: var(--primary);">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+    </div>
+    <div class="label">{{ t('chat_detail.ai_summaries') }}</div>
+    <div class="value">{{ stats.total_summaries }}</div>
+  </div>
+</div>
+
+{% if stats.first_message_at or stats.last_message_at %}
+<div class="panel" style="padding: 14px 18px; display: flex; gap: 32px; flex-wrap: wrap; font-size: 13px;">
+  {% if stats.first_message_at %}
+  <div><span style="color: var(--text-muted);">{{ t('chat_detail.earliest_message') }}：</span><strong>{{ stats.first_message_at | to_beijing('%Y-%m-%d %H:%M') }}</strong></div>
+  {% endif %}
+  {% if stats.last_message_at %}
+  <div><span style="color: var(--text-muted);">{{ t('chat_detail.latest_message') }}：</span><strong>{{ stats.last_message_at | to_beijing('%Y-%m-%d %H:%M') }}</strong></div>
+  {% endif %}
+  <div><span style="color: var(--text-muted);">{{ t('common.status') }}：</span>
+    <span class="badge {{ 'badge-green' if chat.is_active else 'badge-red' }}">{{ t('common.monitoring') if chat.is_active else t('common.stopped') }}</span>
+  </div>
+</div>
+{% endif %}
+
+{% if stats.top_senders %}
+<div class="panel" style="padding: 16px;">
+  <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px;">{{ t('chat_detail.active_senders') }}</div>
+  <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+    {% for item in stats.top_senders %}
+    <span class="badge badge-blue" style="font-size: 13px; padding: 6px 12px;">{{ item.sender }} <span style="opacity: 0.7; margin-left: 4px;">{{ item.count }} {{ t('chat_detail.messages_suffix') }}</span></span>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if summaries %}
+<div class="panel" style="padding: 16px;">
+  <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px;">{{ t('chat_detail.recent_summaries') }}</div>
+  {% for s in summaries %}
+  <div class="summary-card" style="margin-bottom: 8px;">
+    <div class="summary-header">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="badge {% if s.status == 'success' %}badge-green{% elif s.status == 'running' %}badge-amber{% elif s.status == 'failed' %}badge-red{% else %}badge-blue{% endif %}">
+          {% if s.status == 'success' %}{{ t('common.success') }}{% elif s.status == 'running' %}{{ t('common.running') }}{% elif s.status == 'failed' %}{{ t('common.failed') }}{% else %}{{ t('common.pending') }}{% endif %}
+        </span>
+        <span style="font-size: 12px; color: var(--text-muted);">{{ s.message_count }} {{ t('summaries.message_count') }} · {{ s.triggered_at | to_beijing }}</span>
+      </div>
+    </div>
+    {% if s.status == 'success' and s.summary_text %}
+    <div class="summary-body" style="font-size: 13px;">{{ s.summary_text }}</div>
+    {% elif s.status == 'failed' and s.error_message %}
+    <div style="color: var(--red-text); font-size: 12px; padding: 8px 12px; background: var(--red-bg); border-radius: var(--radius-sm);">{{ s.error_message }}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <a href="/summaries?chat_id={{ chat.id }}" style="font-size: 13px; color: var(--primary);">{{ t('chat_detail.view_all_summaries') }}</a>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div style="padding: 16px 16px 0; display: flex; justify-content: space-between; align-items: center;">
+    <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em;">{{ t('chat_detail.message_list') }}</div>
+    <a href="/messages?chat_id={{ chat.id }}" style="font-size: 13px; color: var(--primary);">{{ t('chat_detail.view_in_messages') }}</a>
+  </div>
+  {% if messages %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t('messages.time') }}</th>
+        <th>{{ t('messages.sender') }}</th>
+        <th>{{ t('messages.content') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in messages %}
+      <tr>
+        <td style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">{{ row.message.message_date | to_beijing }}</td>
+        <td style="white-space: nowrap;"><strong>{{ row.sender_name }}</strong></td>
+        <td style="max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ row.message.raw_text or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if total_pages > 1 %}
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border-light);">
+    <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_messages', count=total_count) }}</div>
+    <div class="pagination">
+      <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+      {% if has_prev %}
+      <a class="btn btn-sm btn-secondary" href="/chats/{{ chat.id }}?page={{ page - 1 }}">{{ t('common.prev') }}</a>
+      {% endif %}
+      {% if has_next %}
+      <a class="btn btn-sm btn-secondary" href="/chats/{{ chat.id }}?page={{ page + 1 }}">{{ t('common.next') }}</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📭</div>
+    <div class="empty-title">{{ t('chat_detail.no_messages') }}</div>
+    <div class="empty-desc">{{ t('chat_detail.no_messages_desc') }}</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

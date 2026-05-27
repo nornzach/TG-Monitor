@@ -10,9 +10,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(BASE_DIR / '.env'), env_file_encoding='utf-8', extra='ignore')
 
     app_name: str = 'TG Monitor Platform'
-    app_host: str = '0.0.0.0'
+    app_host: str = '127.0.0.1'
     app_port: int = 8098
-    app_debug: bool = True
+    app_debug: bool = False
 
     database_host: str = '127.0.0.1'
     database_port: int = 3306
@@ -20,15 +20,24 @@ class Settings(BaseSettings):
     database_password: str = ''
     database_name: str = 'tg_monitor'
 
-    telegram_tdata_path: str = '/Users/zach/Library/Application Support/Telegram Desktop/tdata'
+    telegram_tdata_path: str = ''
     telegram_session_path: str = './data/telethon.session'
-    telegram_session_mode: str = 'desktop'  # desktop|existing|manual
+    telegram_session_mode: str = 'manual'  # existing|manual
+    telegram_desktop_import_enabled: bool = False
+    telegram_desktop_import_mode: str = 'create_new'
+    telegram_live_listener_enabled: bool = False
+    telegram_background_collection_enabled: bool = False
     telegram_api_id: int | None = None
     telegram_api_hash: str | None = None
 
     analysis_top_keywords: int = 30
     sync_batch_size: int = 200
     sync_lookback_messages: int = 1000
+    sync_interval_minutes: int = 5
+    ai_summary_batch_size: int = 100
+    ai_summary_running_timeout_minutes: int = 30
+    telegram_download_media_enabled: bool = False
+    telegram_fetch_user_about_enabled: bool = False
     stopwords_extra: str = ''
     media_storage_path: str = './data/media'
 
@@ -49,10 +58,17 @@ class Settings(BaseSettings):
     @field_validator('telegram_session_mode')
     @classmethod
     def validate_mode(cls, value: str) -> str:
-        allowed = {'desktop', 'existing', 'manual'}
+        if value == 'desktop':
+            return 'manual'
+        allowed = {'existing', 'manual'}
         if value not in allowed:
             raise ValueError(f'telegram_session_mode must be one of {allowed}')
         return value
+
+    @field_validator('telegram_desktop_import_mode')
+    @classmethod
+    def validate_desktop_import_mode(cls, value: str) -> str:
+        return 'create_new'
 
     @property
     def sqlalchemy_url(self) -> URL:

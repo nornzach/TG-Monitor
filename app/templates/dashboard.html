@@ -1,54 +1,321 @@
 {% extends "base.html" %}
+{% block title %}{{ t('dashboard.title') }} - TG Monitor{% endblock %}
 {% block content %}
-<h2>仪表盘</h2>
-<div class="cards">
-  <div class="card"><div class="label">群/频道总数</div><div class="value">{{ metrics.total_chats }}</div></div>
-  <div class="card"><div class="label">已启用监控</div><div class="value">{{ metrics.active_chats }}</div></div>
-  <div class="card"><div class="label">消息总数</div><div class="value">{{ metrics.total_messages }}</div></div>
-  <div class="card"><div class="label">24h 新消息</div><div class="value">{{ metrics.messages_24h }}</div></div>
-  <div class="card"><div class="label">发送者总数</div><div class="value">{{ metrics.total_users }}</div></div>
+<div class="page-header">
+  <div>
+    <h2>{{ t('dashboard.title') }}</h2>
+    <div class="page-desc">{{ t('dashboard.desc') }}</div>
+  </div>
 </div>
-<div class="panel">
-  <h3>最近 14 天消息量</h3>
-  <div class="daily-chart">
-    {% set max_count = (metrics.daily_rows | map(attribute='count') | max) if metrics.daily_rows else 0 %}
-    {% for row in metrics.daily_rows %}
-    <div class="daily-chart-row">
-      <div class="daily-chart-label">{{ row.day }}</div>
-      <div class="daily-chart-bar-wrap">
-        <div class="daily-chart-bar" style="width: {{ ((row.count / max_count) * 100) if max_count else 0 }}%"></div>
-      </div>
-      <div class="daily-chart-value">{{ row.count }}</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-icon indigo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_chats') }}</div>
+    <div class="value">{{ metrics.total_chats }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.active_chats') }}</div>
+    <div class="value">{{ metrics.active_chats }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_messages') }}</div>
+    <div class="value">{{ metrics.total_messages }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.messages_24h') }}</div>
+    <div class="value">{{ metrics.messages_24h }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon indigo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_users') }}</div>
+    <div class="value">{{ metrics.total_users }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon indigo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.ai_summaries') }}</div>
+    <div class="value">{{ metrics.success_summaries }}<span style="font-size: 13px; color: var(--text-muted);"> / {{ metrics.total_summaries }}</span></div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_urls') }}</div>
+    <div class="value">{{ metrics.total_urls }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_products') }}</div>
+    <div class="value">{{ metrics.total_products }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_contacts') }}</div>
+    <div class="value">{{ metrics.total_contacts }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.total_alert_rules') }}</div>
+    <div class="value">{{ metrics.total_alert_rules }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon red">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    </div>
+    <div class="label">{{ t('dashboard.unread_alerts') }}</div>
+    <div class="value">{{ metrics.unread_alerts }}</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <h3>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+      {{ t('dashboard.daily_chart') }}
+    </h3>
+    {% if metrics.daily_rows %}
+    <div class="chart-container">
+      <canvas id="dailyChart"></canvas>
     </div>
     {% else %}
-    <div class="empty-state">暂无数据</div>
-    {% endfor %}
+    <div class="empty-state">
+      <div class="empty-icon">📊</div>
+      <div class="empty-title">{{ t('dashboard.no_daily_data') }}</div>
+      <div class="empty-desc">{{ t('dashboard.no_daily_desc') }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      {{ t('dashboard.hourly_chart') }}
+    </h3>
+    {% if metrics.hourly_dist %}
+    <div class="chart-container">
+      <canvas id="hourlyChart"></canvas>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🕐</div>
+      <div class="empty-title">{{ t('dashboard.no_hourly_data') }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h3>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+      {{ t('dashboard.top_chats') }}
+    </h3>
+    {% if metrics.top_chats %}
+    <table>
+      <thead><tr><th>{{ t('dashboard.rank') }}</th><th>{{ t('dashboard.chat_column') }}</th><th>{{ t('dashboard.message_count') }}</th></tr></thead>
+      <tbody>
+        {% for item in metrics.top_chats %}
+        <tr>
+          <td><span class="badge badge-blue">{{ loop.index }}</span></td>
+          <td><a href="/chats/{{ item.chat_id }}" style="color: var(--text-primary); text-decoration: none; font-weight: 600;">{{ item.title }}</a></td>
+          <td style="font-variant-numeric: tabular-nums;">{{ item.message_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">💬</div>
+      <div class="empty-title">{{ t('common.no_data') }}</div>
+    </div>
+    {% endif %}
   </div>
 </div>
+
 <div class="grid-2">
   <div class="panel">
-    <h3>最活跃群组</h3>
-    <table><thead><tr><th>群组</th><th>消息数</th></tr></thead><tbody>
-      {% for item in metrics.top_chats %}<tr><td>{{ item.title }}</td><td>{{ item.message_count }}</td></tr>{% endfor %}
-    </tbody></table>
+    <h3>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      {{ t('dashboard.top_senders') }}
+    </h3>
+    {% if metrics.top_senders %}
+    <table>
+      <thead><tr><th>{{ t('dashboard.rank') }}</th><th>{{ t('dashboard.sender_column') }}</th><th>{{ t('dashboard.message_count') }}</th></tr></thead>
+      <tbody>
+        {% for item in metrics.top_senders %}
+        <tr>
+          <td><span class="badge badge-blue">{{ loop.index }}</span></td>
+          <td>{{ item.sender }}</td>
+          <td style="font-variant-numeric: tabular-nums;">{{ item.message_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">👤</div>
+      <div class="empty-title">{{ t('common.no_data') }}</div>
+    </div>
+    {% endif %}
   </div>
+
   <div class="panel">
-    <h3>高频发送者</h3>
-    <table><thead><tr><th>发送者</th><th>消息数</th></tr></thead><tbody>
-      {% for item in metrics.top_senders %}<tr><td>{{ item.sender }}</td><td>{{ item.message_count }}</td></tr>{% endfor %}
-    </tbody></table>
+    <h3>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      {{ t('dashboard.top_keywords') }}
+    </h3>
+    {% if metrics.top_keywords %}
+    <div class="keyword-list">
+      {% for item in metrics.top_keywords %}
+      <span>{{ item.keyword }} <span class="weight">{{ item.weight }}</span></span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🔑</div>
+      <div class="empty-title">{{ t('common.no_data') }}</div>
+    </div>
+    {% endif %}
   </div>
 </div>
-<div class="grid-2">
-  <div class="panel">
-    <h3>高频关键词</h3>
-    <div class="keyword-list">{% for item in metrics.top_keywords %}<span>{{ item.keyword }} ({{ item.weight }})</span>{% endfor %}</div>
+
+<div class="panel">
+  <h3>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    {{ t('dashboard.recent_syncs') }}
+  </h3>
+  {% if recent_runs %}
+  <table>
+    <thead><tr><th>{{ t('dashboard.run_type') }}</th><th>{{ t('dashboard.run_status') }}</th><th>{{ t('dashboard.run_message') }}</th><th>{{ t('common.time') }}</th></tr></thead>
+    <tbody>
+      {% for run in recent_runs %}
+      <tr>
+        <td><span class="badge badge-blue">{{ run.run_type }}</span></td>
+        <td>
+          {% if run.status == 'success' %}
+          <span class="badge badge-green">{{ t('common.success') }}</span>
+          {% elif run.status == 'running' %}
+          <span class="badge badge-amber">{{ t('common.running') }}</span>
+          {% elif run.status == 'failed' %}
+          <span class="badge badge-red">{{ t('common.failed') }}</span>
+          {% else %}
+          <span class="badge badge-blue">{{ run.status }}</span>
+          {% endif %}
+        </td>
+        <td>{{ run.message or '' }}</td>
+        <td style="white-space: nowrap; font-size: 12px; color: var(--text-muted);">{{ run.started_at | to_beijing }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🔄</div>
+    <div class="empty-title">{{ t('dashboard.no_syncs') }}</div>
+    <div class="empty-desc">{{ t('dashboard.no_syncs_desc') }}</div>
   </div>
-  <div class="panel">
-    <h3>最近同步任务</h3>
-    <table><thead><tr><th>类型</th><th>状态</th><th>信息</th><th>时间</th></tr></thead><tbody>
-      {% for run in recent_runs %}<tr><td>{{ run.run_type }}</td><td>{{ run.status }}</td><td>{{ run.message or '' }}</td><td>{{ run.started_at }}</td></tr>{% endfor %}
-    </tbody></table>
-  </div>
+  {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% if metrics.daily_rows %}
+<script>
+(function() {
+  const labels = [{% for row in metrics.daily_rows %}'{{ row.day[-5:] }}'{% if not loop.last %},{% endif %}{% endfor %}];
+  const data = [{% for row in metrics.daily_rows %}{{ row.count }}{% if not loop.last %},{% endif %}{% endfor %}];
+  const ctx = document.getElementById('dailyChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        backgroundColor: 'rgba(79, 70, 229, 0.7)',
+        hoverBackgroundColor: 'rgba(79, 70, 229, 0.9)',
+        borderRadius: 6,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0f172a',
+          padding: 10,
+          cornerRadius: 8,
+          displayColors: false,
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#94a3b8' }, border: { display: false } },
+        y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8' }, border: { display: false }, beginAtZero: true }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+{% if metrics.hourly_dist %}
+<script>
+(function() {
+  var hours = [{% for row in metrics.hourly_dist %}{{ row.hour }}{% if not loop.last %},{% endif %}{% endfor %}];
+  var counts = [{% for row in metrics.hourly_dist %}{{ row.count }}{% if not loop.last %},{% endif %}{% endfor %}];
+  var labels = hours.map(function(h) { return h + ':00'; });
+  var ctx = document.getElementById('hourlyChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: counts,
+        backgroundColor: 'rgba(16, 185, 129, 0.7)',
+        hoverBackgroundColor: 'rgba(16, 185, 129, 0.9)',
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0f172a',
+          padding: 10,
+          cornerRadius: 8,
+          displayColors: false,
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#94a3b8' }, border: { display: false } },
+        y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8' }, border: { display: false }, beginAtZero: true }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

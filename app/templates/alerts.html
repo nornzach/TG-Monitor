@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ t('alerts.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('alerts.title') }}</h2>
+    <div class="page-desc">{{ t('alerts.desc') }}</div>
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--amber-bg); color: var(--amber);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    </div>
+    <h3>{{ t('alerts.rules_section') }}</h3>
+  </div>
+  <div class="settings-section-body">
+    <form action="/alerts/rules/create" method="post" class="form-vertical" style="margin-bottom: 20px; padding: 16px; background: var(--surface-alt); border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+      <div style="display: grid; grid-template-columns: 1fr 2fr 1fr 1fr; gap: 12px; align-items: end;">
+        <div class="form-group" style="margin-bottom: 0;">
+          <label>{{ t('alerts.rule_name') }}</label>
+          <input type="text" name="name" placeholder="{{ t('alerts.rule_name_placeholder') }}" required>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label>{{ t('alerts.pattern') }}</label>
+          <input type="text" name="pattern" placeholder="{{ t('alerts.pattern_placeholder') }}" required>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label>{{ t('alerts.pattern_type') }}</label>
+          <select name="pattern_type">
+            <option value="keyword">{{ t('alerts.keyword') }}</option>
+            <option value="regex">{{ t('alerts.regex') }}</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+          <label>&nbsp;</label>
+          <button type="submit">{{ t('alerts.add_rule') }}</button>
+        </div>
+      </div>
+      <div style="display: flex; gap: 16px; margin-top: 8px;">
+        <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary);">
+          <input type="checkbox" name="notify_web" value="true" checked> {{ t('alerts.notify_web') }}
+        </label>
+        <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary);">
+          <input type="checkbox" name="notify_telegram" value="true"> {{ t('alerts.notify_telegram') }}
+        </label>
+      </div>
+    </form>
+
+    {% if rules %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('alerts.rule_name_col') }}</th>
+          <th>{{ t('alerts.pattern_col') }}</th>
+          <th>{{ t('alerts.type_col') }}</th>
+          <th>{{ t('alerts.status_col') }}</th>
+          <th>{{ t('alerts.operation_col') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rules %}
+        <tr>
+          <td>{{ rule.name }}</td>
+          <td><code style="font-size: 12px;">{{ rule.pattern }}</code></td>
+          <td>{{ t('alerts.keyword') if rule.pattern_type == 'keyword' else t('alerts.regex') }}</td>
+          <td>
+            <span class="status-dot {{ 'online' if rule.is_active else 'offline' }}"></span>
+            {{ t('common.enabled') if rule.is_active else t('common.disabled') }}
+          </td>
+          <td>
+            <form action="/alerts/rules/{{ rule.id }}/toggle" method="post" style="display: inline;">
+              <button type="submit" class="btn btn-sm">{{ t('alerts.disable_rule') if rule.is_active else t('alerts.enable_rule') }}</button>
+            </form>
+            <form action="/alerts/rules/{{ rule.id }}/delete" method="post" style="display: inline;" onsubmit="return confirm('{{ t('alerts.confirm_delete') }}')">
+              <button type="submit" class="btn btn-sm btn-danger">{{ t('alerts.delete_rule') }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted); font-size: 13px;">{{ t('alerts.no_rules') }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="settings-section">
+  <div class="settings-section-header">
+    <div class="section-icon" style="background: var(--red-bg); color: var(--red);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    </div>
+    <h3>{{ t('alerts.matches_section') }}</h3>
+    <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+      {% if unread_count > 0 %}
+      <span class="badge badge-red">{{ t('alerts.unread_count', count=unread_count) }}</span>
+      <form action="/alerts/matches/read-all" method="post" style="display: inline;">
+        <button type="submit" class="btn btn-sm">{{ t('alerts.mark_all_read') }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="settings-section-body">
+    <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+      <select onchange="window.location='/alerts?'+(this.value?'rule_id='+this.value:'');" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font-size: 13px;">
+        <option value="">{{ t('alerts.rule_filter') }}</option>
+        {% for rule in rules %}
+        <option value="{{ rule.id }}" {% if selected_rule_id == rule.id %}selected{% endif %}>{{ rule.name }}</option>
+        {% endfor %}
+      </select>
+      <select onchange="window.location='/alerts?'+(this.value?'chat_id='+this.value:'');" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font-size: 13px;">
+        <option value="">{{ t('alerts.chat_filter') }}</option>
+        {% for chat in chats %}
+        <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if total_pages > 1 %}
+    <div class="pagination">
+      {% if has_prev %}<a href="/alerts?page={{ page - 1 }}{% if selected_rule_id %}&rule_id={{ selected_rule_id }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+      <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+      {% if has_next %}<a href="/alerts?page={{ page + 1 }}{% if selected_rule_id %}&rule_id={{ selected_rule_id }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if matches %}
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('alerts.rule_col') }}</th>
+          <th>{{ t('alerts.group_col') }}</th>
+          <th>{{ t('alerts.matched_content') }}</th>
+          <th>{{ t('alerts.matched_at') }}</th>
+          <th>{{ t('alerts.match_status') }}</th>
+          <th>{{ t('common.operation') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for match in matches %}
+        <tr style="{{ 'font-weight: 600;' if not match.is_read else '' }}">
+          <td>{{ match.rule.name if match.rule else '-' }}</td>
+          <td>{{ match.chat.title if match.chat else '-' }}</td>
+          <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ (match.matched_text or '-')[:100] }}</td>
+          <td style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">{{ match.matched_at | to_beijing('%Y-%m-%d %H:%M') }}</td>
+          <td>
+            {% if match.is_read %}
+            <span class="badge">{{ t('common.read') }}</span>
+            {% else %}
+            <span class="badge badge-red">{{ t('common.unread') }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if not match.is_read %}
+            <form action="/alerts/matches/{{ match.id }}/read" method="post" style="display: inline;">
+              <button type="submit" class="btn btn-sm">{{ t('alerts.mark_read') }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-muted); font-size: 13px;">{{ t('alerts.no_matches') }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
