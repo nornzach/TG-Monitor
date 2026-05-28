@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     sync_interval_minutes: int = 5
     ai_summary_batch_size: int = 100
     ai_summary_running_timeout_minutes: int = 30
+    url_classification_enabled: bool = True
+    url_classification_interval_minutes: int = 30
+    url_classification_batch_size: int = 50
     telegram_download_media_enabled: bool = False
     telegram_fetch_user_about_enabled: bool = False
     stopwords_extra: str = ''

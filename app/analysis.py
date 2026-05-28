@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, desc, case
 from sqlalchemy.orm import Session
 
-from .models import Message, MonitoredChat, TelegramUser, MessageKeyword, AiSummary, SyncRun, AiUrl, AiProduct, AiContact, AlertRule, AlertMatch
+from .models import Message, MonitoredChat, TelegramUser, MessageKeyword, AiSummary, SyncRun, AiUrl, AiUrlAppearance, AiProduct, AiContact, AlertRule, AlertMatch
 from .config import settings
 
 
@@ -247,7 +247,7 @@ def cross_chat_urls(db: Session, limit: int = 50) -> list[dict]:
             'id': url.id,
             'url': url.url,
             'domain': url.domain,
-            'title': url.title,
+            'title': None,
             'category': url.category,
             'appearance_count': url.appearance_count,
             'chat_count': chat_count,

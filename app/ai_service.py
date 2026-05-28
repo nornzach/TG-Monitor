@@ -10,10 +10,24 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
-from .models import AiSummary, AppSetting, Message, AiUrl, AiUrlAppearance, AiProduct, AiContact
+from .models import (
+    AiSummary,
+    AppSetting,
+    Message,
+    AiUrl,
+    AiUrlAppearance,
+    AiUrlCategory,
+    AiUrlClassificationRun,
+    AiUrlClassification,
+    AiProduct,
+    AiContact,
+)
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
+URL_TRAILING_PUNCTUATION = '.,;，。；）)]}>'
 
 SYSTEM_PROMPT = """你是一个 Telegram 频道/群聊监控分析助手。你的任务是分析一段聊天记录，输出结构化 JSON。
 
@@ -72,6 +86,46 @@ SYSTEM_PROMPT = """你是一个 Telegram 频道/群聊监控分析助手。你�
 - 如果某类数据不存在，返回空数组 []，不要省略字段
 - summary 必须包含这批消息的主要话题、活跃程度、是否有价值信息
 - 所有文本内容必须用中文"""
+
+URL_CLASSIFICATION_SYSTEM_PROMPT = """你是一个 URL 二次分类助手。你的任务是把已经收录的 URL 按业务含义做更细的动态分类。
+
+## 输出 JSON Schema
+你必须只返回 JSON 对象，不要输出 markdown，不要输出解释文字：
+{
+  "items": [
+    {
+      "url_id": 123,
+      "category_slug": "telegram_group",
+      "category_name": "Telegram 群组/频道",
+      "category_description": "t.me 群组、频道、加群邀请链接",
+      "confidence": 0.95,
+      "reason": "域名为 t.me，路径指向频道或群组"
+    }
+  ]
+}
+
+## 规则
+- 每个输入 URL 必须输出一条 items 记录。
+- category_slug 必须是小写英文、数字、下划线，长度不超过 80。
+- 优先复用已有分类；如果确实不合适，可以创建新的 category_slug/category_name。
+- 分类要比 relay/seller/other 更细，例如 telegram_group、cloud_drive、code_repository、payment_store。
+- Telegram 加群/频道链接、夸克网盘、百度网盘、GitHub 项目地址必须分别归到不同细分类。
+- 不能删除 URL，不能省略 URL，只做分类和打标。
+- confidence 是 0 到 1 之间的小数。
+- reason 用中文，简短说明判断依据。"""
+
+DEFAULT_URL_CLASSIFICATION_PROMPT = """请根据 URL 的域名、路径和原始粗分类做细分类。
+
+常见分类偏好：
+- t.me、telegram.me、telegram.dog 的群组/频道/邀请链接 => telegram_group
+- pan.quark.cn、pan.baidu.com、aliyundrive.com 等网盘分享 => cloud_drive
+- github.com、gitlab.com、gitee.com、bitbucket.org 项目地址 => code_repository
+- 节点、代理、VPN、VPS、流量转发相关 => relay_service
+- Telegram 账号、手机号、接码、实名号交易相关 => account_seller
+- 支付、店铺、充值、商品详情页面 => payment_store
+- AI 工具、模型 API、提示词、自动化服务 => ai_tool
+- 文档、教程、博客文章 => documentation
+- 不确定但仍是普通网页 => generic_link"""
 
 PROVIDER_CONFIGS = {
     'deepseek': {
@@ -134,6 +188,11 @@ def get_ai_provider_config(db: Session) -> dict:
     return config
 
 
+def get_url_classification_prompt(db: Session) -> str:
+    prompt = get_ai_setting(db, 'url_classification_prompt')
+    return prompt.strip() if prompt and prompt.strip() else DEFAULT_URL_CLASSIFICATION_PROMPT
+
+
 def _build_message_context(msgs: list[Message]) -> str:
     lines = []
     for m in msgs:
@@ -157,6 +216,28 @@ def _build_message_context(msgs: list[Message]) -> str:
     return full
 
 
+def _clean_url(raw_url: str) -> str:
+    return raw_url.strip().rstrip(URL_TRAILING_PUNCTUATION)
+
+
+def extract_urls_from_text(text: str | None) -> list[str]:
+    if not text:
+        return []
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in URL_PATTERN.findall(text):
+        url = _clean_url(match)
+        if not url or not URL_PATTERN.match(url):
+            continue
+        dedup_key = url.lower()
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        urls.append(url)
+    return urls
+
+
 def _validate_and_normalize(result: dict) -> dict:
     validated = {
         'summary': '',
@@ -171,13 +252,25 @@ def _validate_and_normalize(result: dict) -> dict:
     if isinstance(result.get('summary'), str) and result['summary'].strip():
         validated['summary'] = result['summary'].strip()
 
-    url_pattern = re.compile(r'^https?://\S+')
     for key in ('relay_urls', 'seller_urls', 'other_urls'):
         raw = result.get(key, [])
         if isinstance(raw, list):
-            validated[key] = [u.strip().rstrip('.,;，。；）)]') for u in raw if isinstance(u, str) and url_pattern.match(u.strip())]
+            urls: list[str] = []
+            seen: set[str] = set()
+            for item in raw:
+                if not isinstance(item, str):
+                    continue
+                url = _clean_url(item)
+                if not url or not URL_PATTERN.match(url):
+                    continue
+                dedup_key = url.lower()
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                urls.append(url)
+            validated[key] = urls
         elif isinstance(raw, str):
-            validated[key] = [u.strip().rstrip('.,;，。；）)]') for u in re.findall(r'https?://\S+', raw) if url_pattern.match(u)]
+            validated[key] = extract_urls_from_text(raw)
 
     if isinstance(result.get('top_senders'), list):
         validated['top_senders'] = [str(s) for s in result['top_senders'] if s][:3]
@@ -252,7 +345,19 @@ def _extract_json_from_text(text: str) -> dict:
             return json.loads(match.group(0))
         except json.JSONDecodeError:
             pass
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
     return {'summary': text, 'relay_urls': [], 'seller_urls': [], 'other_urls': []}
+
+
+def _extract_json_object(text: str) -> dict:
+    parsed = _extract_json_from_text(text)
+    return parsed if isinstance(parsed, dict) else {}
 
 
 async def _call_openai_compatible(api_key: str, base_url: str, model: str, full_text: str, supports_json: bool) -> dict:
@@ -304,6 +409,31 @@ async def _call_openai_compatible(api_key: str, base_url: str, model: str, full_
     return _extract_json_from_text(content)
 
 
+async def _call_openai_compatible_json(
+    api_key: str,
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    supports_json: bool,
+) -> dict:
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    kwargs = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+        'temperature': 0.1,
+    }
+    if supports_json:
+        kwargs['response_format'] = {'type': 'json_object'}
+    response = await client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content or '{}'
+    return _extract_json_object(content)
+
+
 async def _call_anthropic(api_key: str, model: str, full_text: str) -> dict:
     from anthropic import AsyncAnthropic
     client = AsyncAnthropic(api_key=api_key)
@@ -318,6 +448,22 @@ async def _call_anthropic(api_key: str, model: str, full_text: str) -> dict:
     )
     content = response.content[0].text if response.content else '{}'
     return _extract_json_from_text(content)
+
+
+async def _call_anthropic_json(api_key: str, model: str, system_prompt: str, user_prompt: str) -> dict:
+    from anthropic import AsyncAnthropic
+    client = AsyncAnthropic(api_key=api_key)
+    response = await client.messages.create(
+        model=model,
+        max_tokens=4096,
+        system=system_prompt + '\n\n请直接返回 JSON，不要包含其他文本或 markdown 标记。',
+        messages=[
+            {'role': 'user', 'content': user_prompt},
+        ],
+        temperature=0.1,
+    )
+    content = response.content[0].text if response.content else '{}'
+    return _extract_json_object(content)
 
 
 async def summarize_text(api_key: str, provider_config: dict, full_text: str) -> dict:
@@ -337,6 +483,261 @@ async def summarize_text(api_key: str, provider_config: dict, full_text: str) ->
 async def summarize_messages(chat_id: int, api_key: str, provider_config: dict, msgs: list[Message]) -> dict:
     full_text = _build_message_context(msgs)
     return await summarize_text(api_key, provider_config, full_text)
+
+
+def _normalize_category_slug(value: str | None) -> str:
+    slug = re.sub(r'[^a-z0-9_]+', '_', (value or '').strip().lower()).strip('_')
+    return slug[:80] or 'other'
+
+
+def _validate_url_classification_result(result: dict, url_ids: set[int]) -> list[dict]:
+    raw_items = result.get('items')
+    if raw_items is None:
+        raw_items = result.get('classifications')
+    if not isinstance(raw_items, list):
+        return []
+
+    items = []
+    seen: set[int] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            url_id = int(raw.get('url_id'))
+        except (TypeError, ValueError):
+            continue
+        if url_id not in url_ids or url_id in seen:
+            continue
+        seen.add(url_id)
+
+        slug = _normalize_category_slug(raw.get('category_slug'))
+        name = str(raw.get('category_name') or slug.replace('_', ' ')).strip()[:100]
+        description = str(raw.get('category_description') or '').strip()[:500] or None
+        reason = str(raw.get('reason') or '').strip()[:500] or None
+        confidence = raw.get('confidence')
+        try:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        except (TypeError, ValueError):
+            confidence = None
+
+        items.append({
+            'url_id': url_id,
+            'category_slug': slug,
+            'category_name': name,
+            'category_description': description,
+            'confidence': confidence,
+            'reason': reason,
+        })
+    return items
+
+
+def _build_url_classification_prompt(urls: list[AiUrl], categories: list[AiUrlCategory], business_prompt: str) -> str:
+    category_lines = [
+        f'- {c.slug}: {c.name}' + (f'；{c.description}' if c.description else '')
+        for c in categories
+        if c.is_active
+    ]
+    url_lines = [
+        json.dumps({
+            'url_id': u.id,
+            'url': u.url,
+            'domain': u.domain,
+            'legacy_category': u.category,
+            'appearance_count': u.appearance_count,
+        }, ensure_ascii=False)
+        for u in urls
+    ]
+    return (
+        f'{business_prompt}\n\n'
+        '已有分类：\n' + '\n'.join(category_lines) + '\n\n'
+        '待分类 URL，每行一个 JSON：\n' + '\n'.join(url_lines)
+    )
+
+
+async def classify_urls(api_key: str, provider_config: dict, urls: list[AiUrl], categories: list[AiUrlCategory], business_prompt: str) -> list[dict]:
+    api_type = provider_config.get('api_type', 'openai_compatible')
+    base_url = provider_config.get('base_url', '')
+    model = provider_config.get('default_model', '')
+    supports_json = provider_config.get('supports_json_mode', True)
+    user_prompt = _build_url_classification_prompt(urls, categories, business_prompt)
+
+    if api_type == 'anthropic':
+        parsed = await _call_anthropic_json(api_key, model, URL_CLASSIFICATION_SYSTEM_PROMPT, user_prompt)
+    else:
+        parsed = await _call_openai_compatible_json(
+            api_key, base_url, model, URL_CLASSIFICATION_SYSTEM_PROMPT, user_prompt, supports_json
+        )
+    return _validate_url_classification_result(parsed, {u.id for u in urls})
+
+
+def _apply_url_classifications(db: Session, run: AiUrlClassificationRun, urls: list[AiUrl], items: list[dict]) -> tuple[int, int]:
+    now = datetime.utcnow()
+    url_by_id = {u.id: u for u in urls}
+    category_by_slug = {
+        c.slug: c for c in db.query(AiUrlCategory).filter(AiUrlCategory.is_active.is_(True)).all()
+    }
+    created_categories = 0
+    processed = 0
+
+    for item in items:
+        url = url_by_id.get(item['url_id'])
+        if not url:
+            continue
+        category = category_by_slug.get(item['category_slug'])
+        if not category:
+            category = AiUrlCategory(
+                slug=item['category_slug'],
+                name=item['category_name'],
+                description=item['category_description'],
+                source='ai',
+                is_active=True,
+            )
+            db.add(category)
+            db.flush()
+            category_by_slug[category.slug] = category
+            created_categories += 1
+
+        db.query(AiUrlClassification).filter(
+            AiUrlClassification.url_id == url.id,
+            AiUrlClassification.is_primary.is_(True),
+        ).update({AiUrlClassification.is_primary: False})
+
+        existing = db.query(AiUrlClassification).filter(
+            AiUrlClassification.url_id == url.id,
+            AiUrlClassification.category_id == category.id,
+        ).first()
+        if existing:
+            existing.run_id = run.id
+            existing.confidence = item['confidence']
+            existing.reason = item['reason']
+            existing.is_primary = True
+            existing.created_at = now
+        else:
+            db.add(AiUrlClassification(
+                url_id=url.id,
+                category_id=category.id,
+                run_id=run.id,
+                confidence=item['confidence'],
+                reason=item['reason'],
+                is_primary=True,
+                created_at=now,
+            ))
+
+        url.primary_category_id = category.id
+        url.classification_run_id = run.id
+        url.classification_status = 'classified'
+        url.classified_at = now
+        url.classification_error = None
+        processed += 1
+
+    classified_ids = {item['url_id'] for item in items}
+    for url in urls:
+        if url.id in classified_ids:
+            continue
+        url.classification_status = 'failed'
+        url.classification_run_id = run.id
+        url.classification_error = 'AI response did not include this URL'
+
+    return processed, created_categories
+
+
+async def run_url_classification_once(batch_size: int | None = None, include_classified: bool = False) -> dict:
+    db = SessionLocal()
+    run_id: int | None = None
+    urls: list[AiUrl] = []
+    try:
+        api_key = get_ai_setting(db, 'ai_api_key')
+        if not api_key:
+            return {'status': 'skipped', 'reason': 'missing_api_key', 'processed': 0}
+
+        running = db.query(AiUrlClassificationRun).filter(
+            AiUrlClassificationRun.status == 'running',
+        ).first()
+        if running:
+            timeout_at = datetime.utcnow() - timedelta(minutes=settings.ai_summary_running_timeout_minutes)
+            if running.started_at and running.started_at < timeout_at:
+                running.status = 'failed'
+                running.error_message = 'URL classification timed out and was released for retry'
+                running.finished_at = datetime.utcnow()
+                db.commit()
+            else:
+                return {'status': 'skipped', 'reason': 'already_running', 'processed': 0}
+
+        limit = batch_size or settings.url_classification_batch_size
+        limit = min(max(limit, 1), 200)
+        query = db.query(AiUrl).order_by(AiUrl.id.asc())
+        if not include_classified:
+            query = query.filter(
+                (AiUrl.classification_status.is_(None)) |
+                (AiUrl.classification_status.in_(('pending', 'failed')))
+            )
+        urls = query.limit(limit).all()
+        if not urls:
+            return {'status': 'skipped', 'reason': 'no_pending_urls', 'processed': 0}
+
+        run = AiUrlClassificationRun(
+            status='running',
+            batch_size=limit,
+            total_urls=len(urls),
+            prompt_version='url-classification-v1',
+            started_at=datetime.utcnow(),
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+        for url in urls:
+            url.classification_status = 'running'
+            url.classification_run_id = run.id
+            url.classification_error = None
+        categories = db.query(AiUrlCategory).filter(AiUrlCategory.is_active.is_(True)).order_by(AiUrlCategory.slug.asc()).all()
+        provider_config = get_ai_provider_config(db)
+        business_prompt = get_url_classification_prompt(db)
+        db.commit()
+
+        db.expunge_all()
+        db.close()
+        items = await classify_urls(api_key, provider_config, urls, categories, business_prompt)
+
+        db = SessionLocal()
+        run = db.get(AiUrlClassificationRun, run_id)
+        urls = db.query(AiUrl).filter(AiUrl.classification_run_id == run_id).all()
+        if not run:
+            return {'status': 'failed', 'reason': 'run_missing', 'processed': 0}
+        processed, created_categories = _apply_url_classifications(db, run, urls, items)
+        run.processed_urls = processed
+        run.created_categories = created_categories
+        run.status = 'success' if processed else 'failed'
+        if not processed:
+            run.error_message = 'AI response did not classify any URL'
+        run.finished_at = datetime.utcnow()
+        db.commit()
+        logger.info('URL classification run=%s processed=%d created_categories=%d', run.id, processed, created_categories)
+        return {
+            'status': run.status,
+            'run_id': run.id,
+            'processed': processed,
+            'total': len(urls),
+            'created_categories': created_categories,
+        }
+    except Exception as exc:
+        logger.exception('URL classification failed run=%s', run_id)
+        try:
+            db.rollback()
+            if run_id:
+                run = db.get(AiUrlClassificationRun, run_id)
+                if run:
+                    run.status = 'failed'
+                    run.error_message = str(exc)
+                    run.finished_at = datetime.utcnow()
+                for url in db.query(AiUrl).filter(AiUrl.classification_run_id == run_id).all():
+                    url.classification_status = 'failed'
+                    url.classification_error = str(exc)
+                db.commit()
+        except Exception:
+            pass
+        return {'status': 'failed', 'reason': str(exc), 'processed': 0}
+    finally:
+        db.close()
 
 
 async def run_summary_for_chat(chat_id: int) -> None:
@@ -585,6 +986,9 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
         for url in urls:
             if not isinstance(url, str) or not url.strip():
                 continue
+            url = _clean_url(url)
+            if not URL_PATTERN.match(url):
+                continue
             h = _url_hash(url)
             domain = _extract_domain(url)
             try:
@@ -607,12 +1011,13 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
                 else:
                     chat_seen = {str(chat_id): now.isoformat()} if chat_id else None
                     reputation = _compute_reputation(1, chat_seen, domain)
-                    db.add(AiUrl(
+                    existing = AiUrl(
                         url=url, url_hash=h, category=category, domain=domain,
                         appearance_count=1, chat_ids_seen=chat_seen,
                         reputation_score=reputation,
                         first_seen_at=now, last_seen_at=now
-                    ))
+                    )
+                    db.add(existing)
                     db.flush()
                 # Track appearance
                 if chat_id:
@@ -633,6 +1038,24 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
                 except Exception:
                     db.rollback()
     db.commit()
+
+
+def upsert_discovered_urls(urls: list[str], category: str = 'other', chat_id: int | None = None) -> int:
+    category_key = {
+        'relay': 'relay_urls',
+        'seller': 'seller_urls',
+        'other': 'other_urls',
+    }.get(category, 'other_urls')
+    normalized_urls = extract_urls_from_text('\n'.join(urls))
+    if not normalized_urls:
+        return 0
+
+    db = SessionLocal()
+    try:
+        _upsert_urls(db, {category_key: normalized_urls}, chat_id=chat_id)
+        return len(normalized_urls)
+    finally:
+        db.close()
 
 
 def _upsert_products(db: Session, products: list[dict], chat_id: int, summary_id: int | None = None) -> None:

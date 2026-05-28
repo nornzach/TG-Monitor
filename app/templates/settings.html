@@ -173,6 +173,23 @@
         </div>
       </div>
 
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
+        <label class="checkbox-label">
+          <input type="checkbox" name="url_classification_enabled" value="true" {% if url_classification_enabled %}checked{% endif %}>
+          URL 二次分类
+        </label>
+        <div class="form-group">
+          <label>URL 分类间隔（分钟）</label>
+          <input type="number" name="url_classification_interval_minutes" min="1" max="1440" value="{{ url_classification_interval_minutes }}">
+          <span class="help-text">定时按批调用 AI 分类已收录 URL</span>
+        </div>
+        <div class="form-group">
+          <label>URL 分类批量</label>
+          <input type="number" name="url_classification_batch_size" min="1" max="200" value="{{ url_classification_batch_size }}">
+          <span class="help-text">默认 50 条一批，越大单次 token 越多</span>
+        </div>
+      </div>
+
       <button type="submit">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         {{ t('settings.save_collection') }}
@@ -221,6 +238,11 @@
         <label>{{ t('settings.api_base_url') }}</label>
         <input type="text" name="ai_base_url" id="ai-base-url-input" value="{{ ai_base_url }}" placeholder="https://api.deepseek.com/v1">
         <span class="help-text">{{ t('settings.api_base_desc') }}</span>
+      </div>
+      <div class="form-group">
+        <label>URL 二次分类提示词</label>
+        <textarea name="url_classification_prompt" rows="8" style="width: 100%; resize: vertical;">{{ url_classification_prompt }}</textarea>
+        <span class="help-text">这里只写业务偏好；系统会强制 JSON 输出格式和字段校验</span>
       </div>
       <button type="submit">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>

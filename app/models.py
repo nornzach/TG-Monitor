@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, BigInteger, String, Text, UniqueConstraint, JSON, Index
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, BigInteger, String, Text, UniqueConstraint, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -137,6 +137,11 @@ class AiUrl(Base):
     appearance_count: Mapped[int] = mapped_column(Integer, default=1)
     chat_ids_seen: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     reputation_score: Mapped[float | None] = mapped_column(nullable=True)
+    classification_status: Mapped[str] = mapped_column(String(20), default='pending', index=True)
+    primary_category_id: Mapped[int | None] = mapped_column(ForeignKey('ai_url_categories.id'), nullable=True, index=True)
+    classification_run_id: Mapped[int | None] = mapped_column(ForeignKey('ai_url_classification_runs.id'), nullable=True, index=True)
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    classification_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -153,6 +158,51 @@ class AiUrlAppearance(Base):
     chat_id: Mapped[int] = mapped_column(ForeignKey('monitored_chats.id'), index=True)
     summary_id: Mapped[int | None] = mapped_column(ForeignKey('ai_summaries.id'), nullable=True)
     seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AiUrlCategory(Base):
+    __tablename__ = 'ai_url_categories'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default='ai', index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AiUrlClassificationRun(Base):
+    __tablename__ = 'ai_url_classification_runs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(30), default='running', index=True)
+    batch_size: Mapped[int] = mapped_column(Integer, default=50)
+    total_urls: Mapped[int] = mapped_column(Integer, default=0)
+    processed_urls: Mapped[int] = mapped_column(Integer, default=0)
+    created_categories: Mapped[int] = mapped_column(Integer, default=0)
+    prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AiUrlClassification(Base):
+    __tablename__ = 'ai_url_classifications'
+    __table_args__ = (
+        UniqueConstraint('url_id', 'category_id', name='uq_url_category'),
+        Index('idx_url_classification_run', 'run_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url_id: Mapped[int] = mapped_column(ForeignKey('ai_urls.id'), index=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey('ai_url_categories.id'), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey('ai_url_classification_runs.id'), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class AiProduct(Base):

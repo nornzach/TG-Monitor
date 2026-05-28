@@ -16,11 +16,11 @@ from sqlalchemy import select, desc, func
 
 from . import analysis
 from .analysis import dashboard_metrics, chat_statistics, system_status
-from .ai_service import PROVIDER_CONFIGS, get_ai_provider_config, run_summary_now
+from .ai_service import PROVIDER_CONFIGS, get_ai_provider_config, get_url_classification_prompt, run_summary_now, run_url_classification_once
 from .collector import collector
 from .config import settings, BASE_DIR
 from .db import init_database, session_scope
-from .models import MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary, AiUrl, AiProduct, AiContact, AlertRule, AlertMatch
+from .models import MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact, AlertRule, AlertMatch
 from .telegram_client import telegram_session_manager
 
 # ==================== i18n ====================
@@ -108,6 +108,58 @@ def _update_env_file(updates: dict[str, str]) -> None:
 def _apply_settings(updates: dict[str, object]) -> None:
     for key, value in updates.items():
         setattr(settings, key, value)
+
+
+def _iso_dt(value: datetime | None) -> str | None:
+    return value.isoformat(sep=' ') if value else None
+
+
+def _normalize_pagination(page: int, page_size: int, max_page_size: int = 200) -> tuple[int, int]:
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), max_page_size)
+    return page, page_size
+
+
+def _pagination_meta(total: int, page: int, page_size: int) -> dict:
+    total_pages = max((total + page_size - 1) // page_size, 1)
+    return {
+        'page': page,
+        'page_size': page_size,
+        'total': total,
+        'total_pages': total_pages,
+        'has_prev': page > 1,
+        'has_next': page < total_pages,
+    }
+
+
+def _query_total(db, query) -> int:
+    return db.execute(select(func.count()).select_from(query.order_by(None).subquery())).scalar_one()
+
+
+def _chat_payload(chat: MonitoredChat | None) -> dict | None:
+    if not chat:
+        return None
+    return {
+        'id': chat.id,
+        'telegram_id': chat.telegram_id,
+        'title': chat.title,
+        'username': chat.username,
+        'chat_type': chat.chat_type,
+        'is_active': chat.is_active,
+    }
+
+
+def _sender_payload(sender: TelegramUser | None) -> dict | None:
+    if not sender:
+        return None
+    return {
+        'id': sender.id,
+        'telegram_id': sender.telegram_id,
+        'username': sender.username,
+        'first_name': sender.first_name,
+        'last_name': sender.last_name,
+        'is_bot': sender.is_bot,
+    }
 
 
 def _acquire_instance_lock() -> None:
@@ -460,6 +512,7 @@ async def settings_page(request: Request):
         ai_key_row = db.execute(select(AppSetting).where(AppSetting.key == 'ai_api_key')).scalar_one_or_none()
         ai_base_url_row = db.execute(select(AppSetting).where(AppSetting.key == 'ai_base_url')).scalar_one_or_none()
         ai_model_row = db.execute(select(AppSetting).where(AppSetting.key == 'ai_model')).scalar_one_or_none()
+        url_classification_prompt = get_url_classification_prompt(db)
         # Legacy migration: read old keys if new ones don't exist
         if not ai_key_row:
             old_key = db.execute(select(AppSetting).where(AppSetting.key == 'deepseek_api_key')).scalar_one_or_none()
@@ -497,6 +550,9 @@ async def settings_page(request: Request):
             'sync_lookback_messages': settings.sync_lookback_messages,
             'ai_summary_batch_size': settings.ai_summary_batch_size,
             'ai_summary_running_timeout_minutes': settings.ai_summary_running_timeout_minutes,
+            'url_classification_enabled': settings.url_classification_enabled,
+            'url_classification_interval_minutes': settings.url_classification_interval_minutes,
+            'url_classification_batch_size': settings.url_classification_batch_size,
             'analysis_top_keywords': settings.analysis_top_keywords,
             'media_storage_path': settings.media_storage_path,
             'stopwords_extra': settings.stopwords_extra,
@@ -515,6 +571,7 @@ async def settings_page(request: Request):
             'ai_providers': PROVIDER_CONFIGS,
             'ai_model': ai_model_row.value if ai_model_row else provider_config.get('default_model', ''),
             'ai_base_url': ai_base_url,
+            'url_classification_prompt': url_classification_prompt,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
         },
@@ -559,6 +616,7 @@ def save_ai_config(
     ai_api_key: str = Form(default=''),
     ai_base_url: str = Form(default=''),
     ai_model: str = Form(default=''),
+    url_classification_prompt: str = Form(default=''),
 ):
     if ai_provider not in PROVIDER_CONFIGS:
         ai_provider = 'deepseek'
@@ -575,10 +633,11 @@ def save_ai_config(
 
     with session_scope() as db:
         _upsert_setting(db, 'ai_provider', ai_provider)
-        if ai_api_key.strip():
+        if ai_api_key.strip() and ai_api_key.strip() != '••••••••':
             _upsert_setting(db, 'ai_api_key', ai_api_key.strip())
         _upsert_setting(db, 'ai_base_url', ai_base_url.strip())
         _upsert_setting(db, 'ai_model', ai_model.strip())
+        _upsert_setting(db, 'url_classification_prompt', url_classification_prompt.strip())
     return redirect_with_message('/settings', _t(request, 'settings.ai_saved'), 'success')
 
 
@@ -595,6 +654,9 @@ async def save_runtime_config(
     sync_lookback_messages: int = Form(default=1000),
     ai_summary_batch_size: int = Form(default=100),
     ai_summary_running_timeout_minutes: int = Form(default=30),
+    url_classification_enabled: bool = Form(default=False),
+    url_classification_interval_minutes: int = Form(default=30),
+    url_classification_batch_size: int = Form(default=50),
 ):
     if desktop_import_mode != 'create_new':
         return redirect_with_message('/settings', _t(request, 'settings.invalid_import_mode'), 'error')
@@ -604,6 +666,8 @@ async def save_runtime_config(
     sync_lookback_messages = min(max(sync_lookback_messages, 100), 10000)
     ai_summary_batch_size = min(max(ai_summary_batch_size, 20), 1000)
     ai_summary_running_timeout_minutes = min(max(ai_summary_running_timeout_minutes, 5), 1440)
+    url_classification_interval_minutes = min(max(url_classification_interval_minutes, 1), 1440)
+    url_classification_batch_size = min(max(url_classification_batch_size, 1), 200)
 
     _apply_settings({
         'telegram_desktop_import_mode': desktop_import_mode,
@@ -616,6 +680,9 @@ async def save_runtime_config(
         'sync_lookback_messages': sync_lookback_messages,
         'ai_summary_batch_size': ai_summary_batch_size,
         'ai_summary_running_timeout_minutes': ai_summary_running_timeout_minutes,
+        'url_classification_enabled': url_classification_enabled,
+        'url_classification_interval_minutes': url_classification_interval_minutes,
+        'url_classification_batch_size': url_classification_batch_size,
     })
     _update_env_file({
         'TELEGRAM_DESKTOP_IMPORT_MODE': desktop_import_mode,
@@ -628,6 +695,9 @@ async def save_runtime_config(
         'SYNC_LOOKBACK_MESSAGES': str(sync_lookback_messages),
         'AI_SUMMARY_BATCH_SIZE': str(ai_summary_batch_size),
         'AI_SUMMARY_RUNNING_TIMEOUT_MINUTES': str(ai_summary_running_timeout_minutes),
+        'URL_CLASSIFICATION_ENABLED': _env_bool(url_classification_enabled),
+        'URL_CLASSIFICATION_INTERVAL_MINUTES': str(url_classification_interval_minutes),
+        'URL_CLASSIFICATION_BATCH_SIZE': str(url_classification_batch_size),
     })
     await collector.apply_runtime_config()
     return redirect_with_message('/settings', _t(request, 'settings.collection_saved'), 'success')
@@ -707,13 +777,28 @@ CATEGORY_ORDER = ['relay', 'seller', 'other']
 
 
 @app.get('/urls', response_class=HTMLResponse)
-def urls_page(request: Request, category: str | None = None, page: int = 1):
+def urls_page(
+    request: Request,
+    category: str | None = None,
+    ai_category_id: int | None = None,
+    classification_status: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+):
     page_size = 50
     page = max(page, 1)
+    valid_statuses = {'pending', 'running', 'classified', 'failed'}
     with session_scope() as db:
         query = select(AiUrl).order_by(AiUrl.last_seen_at.desc())
         if category in CATEGORY_KEYS:
             query = query.where(AiUrl.category == category)
+        if ai_category_id:
+            query = query.where(AiUrl.primary_category_id == ai_category_id)
+        if classification_status in valid_statuses:
+            query = query.where(AiUrl.classification_status == classification_status)
+        if keyword and keyword.strip():
+            like = f'%{keyword.strip()}%'
+            query = query.where((AiUrl.url.like(like)) | (AiUrl.domain.like(like)))
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         total_count = db.execute(count_query).scalar_one()
         urls = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
@@ -725,6 +810,32 @@ def urls_page(request: Request, category: str | None = None, page: int = 1):
         domain_stats = analysis.domain_frequency_stats(db, limit=10)
         reputation = analysis.url_reputation_summary(db)
         cross_chat = analysis.cross_chat_urls(db, limit=10)
+        ai_categories = db.execute(
+            select(AiUrlCategory).where(AiUrlCategory.is_active.is_(True)).order_by(AiUrlCategory.name.asc())
+        ).scalars().all()
+        ai_category_map = {c.id: c for c in ai_categories}
+        ai_category_counts = {
+            cid: count for cid, count in db.execute(
+                select(AiUrl.primary_category_id, func.count(AiUrl.id))
+                .where(AiUrl.primary_category_id.isnot(None))
+                .group_by(AiUrl.primary_category_id)
+            ).all()
+        }
+        status_counts = {
+            status or 'pending': count for status, count in db.execute(
+                select(AiUrl.classification_status, func.count(AiUrl.id))
+                .group_by(AiUrl.classification_status)
+            ).all()
+        }
+        recent_classification_runs = db.execute(
+            select(AiUrlClassificationRun).order_by(AiUrlClassificationRun.id.desc()).limit(5)
+        ).scalars().all()
+        pending_classification_count = db.execute(
+            select(func.count(AiUrl.id)).where(
+                (AiUrl.classification_status.is_(None)) |
+                (AiUrl.classification_status.in_(('pending', 'failed')))
+            )
+        ).scalar_one()
     total_pages = max((total_count + page_size - 1) // page_size, 1)
     return templates.TemplateResponse(
         request=request,
@@ -733,6 +844,9 @@ def urls_page(request: Request, category: str | None = None, page: int = 1):
             'request': request,
             'urls': urls,
             'selected_category': category,
+            'selected_ai_category_id': ai_category_id,
+            'selected_classification_status': classification_status,
+            'keyword': keyword or '',
             'counts': counts,
             'labels': {k: _t(request, v) for k, v in CATEGORY_KEYS.items()},
             'order': CATEGORY_ORDER,
@@ -745,10 +859,28 @@ def urls_page(request: Request, category: str | None = None, page: int = 1):
             'domain_stats': domain_stats,
             'reputation': reputation,
             'cross_chat_urls': cross_chat,
+            'ai_categories': ai_categories,
+            'ai_category_map': ai_category_map,
+            'ai_category_counts': ai_category_counts,
+            'status_counts': status_counts,
+            'recent_classification_runs': recent_classification_runs,
+            'pending_classification_count': pending_classification_count,
+            'url_classification_batch_size': settings.url_classification_batch_size,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
         },
     )
+
+
+@app.post('/urls/classify-now')
+async def classify_urls_now(request: Request, batch_size: int = Form(default=50), include_classified: bool = Form(default=False)):
+    batch_size = min(max(batch_size, 1), 200)
+    result = await run_url_classification_once(batch_size=batch_size, include_classified=include_classified)
+    if result.get('status') == 'success':
+        return redirect_with_message('/urls', f"URL 分类完成，处理 {result.get('processed', 0)} 条", 'success')
+    if result.get('status') == 'skipped':
+        return redirect_with_message('/urls', f"URL 分类跳过：{result.get('reason', '')}", 'info')
+    return redirect_with_message('/urls', f"URL 分类失败：{result.get('reason', '')}", 'error')
 
 
 @app.get('/chats/{chat_id}', response_class=HTMLResponse)
@@ -939,6 +1071,216 @@ CONTACT_TYPE_KEYS = {
     'email': 'contacts.email', 'phone': 'contacts.phone', 'other': 'contacts.other',
 }
 CONTACT_TYPE_ORDER = ['tg_user', 'tg_group', 'email', 'phone', 'other']
+
+
+@app.get('/api/urls')
+def api_urls(
+    category: str | None = None,
+    ai_category_id: int | None = None,
+    ai_category_slug: str | None = None,
+    classification_status: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    page, page_size = _normalize_pagination(page, page_size)
+    valid_statuses = {'pending', 'running', 'classified', 'failed'}
+    with session_scope() as db:
+        resolved_ai_category_id = ai_category_id
+        if ai_category_slug and not resolved_ai_category_id:
+            category_row = db.execute(
+                select(AiUrlCategory).where(AiUrlCategory.slug == ai_category_slug)
+            ).scalar_one_or_none()
+            resolved_ai_category_id = category_row.id if category_row else -1
+
+        query = select(AiUrl).order_by(AiUrl.last_seen_at.desc())
+        if category in CATEGORY_KEYS:
+            query = query.where(AiUrl.category == category)
+        if resolved_ai_category_id:
+            query = query.where(AiUrl.primary_category_id == resolved_ai_category_id)
+        if classification_status in valid_statuses:
+            query = query.where(AiUrl.classification_status == classification_status)
+        if keyword and keyword.strip():
+            like = f'%{keyword.strip()}%'
+            query = query.where((AiUrl.url.like(like)) | (AiUrl.domain.like(like)))
+
+        total = _query_total(db, query)
+        urls = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        category_ids = {u.primary_category_id for u in urls if u.primary_category_id}
+        ai_categories = {}
+        if category_ids:
+            ai_categories = {
+                c.id: c for c in db.execute(
+                    select(AiUrlCategory).where(AiUrlCategory.id.in_(category_ids))
+                ).scalars().all()
+            }
+
+        items = []
+        for url in urls:
+            primary_category = ai_categories.get(url.primary_category_id)
+            items.append({
+                'id': url.id,
+                'url': url.url,
+                'domain': url.domain,
+                'category': url.category,
+                'appearance_count': url.appearance_count,
+                'chat_ids_seen': url.chat_ids_seen,
+                'reputation_score': url.reputation_score,
+                'classification_status': url.classification_status or 'pending',
+                'primary_category': {
+                    'id': primary_category.id,
+                    'slug': primary_category.slug,
+                    'name': primary_category.name,
+                    'description': primary_category.description,
+                    'source': primary_category.source,
+                } if primary_category else None,
+                'classification_run_id': url.classification_run_id,
+                'classified_at': _iso_dt(url.classified_at),
+                'classification_error': url.classification_error,
+                'first_seen_at': _iso_dt(url.first_seen_at),
+                'last_seen_at': _iso_dt(url.last_seen_at),
+            })
+
+    return {'pagination': _pagination_meta(total, page, page_size), 'items': items}
+
+
+@app.get('/api/messages')
+def api_messages(
+    chat_id: int | None = None,
+    keyword: str | None = None,
+    media_only: bool = False,
+    sender: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    page, page_size = _normalize_pagination(page, page_size)
+    with session_scope() as db:
+        query = select(Message).order_by(Message.message_date.desc())
+        if chat_id:
+            query = query.where(Message.chat_id == chat_id)
+        if keyword and keyword.strip():
+            query = query.where(Message.normalized_text.like(f'%{keyword.strip()}%'))
+        if media_only:
+            query = query.where(Message.has_media.is_(True))
+        if sender and sender.strip():
+            sender_value = sender.strip()
+            sender_user = db.execute(select(TelegramUser).where(
+                (TelegramUser.username == sender_value) | (TelegramUser.first_name == sender_value)
+            )).scalar_one_or_none()
+            query = query.where(Message.sender_user_id == (sender_user.id if sender_user else -1))
+
+        total = _query_total(db, query)
+        messages = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        chat_ids = {m.chat_id for m in messages}
+        sender_ids = {m.sender_user_id for m in messages if m.sender_user_id}
+        chats = {
+            c.id: c for c in db.execute(select(MonitoredChat).where(MonitoredChat.id.in_(chat_ids))).scalars().all()
+        } if chat_ids else {}
+        senders = {
+            s.id: s for s in db.execute(select(TelegramUser).where(TelegramUser.id.in_(sender_ids))).scalars().all()
+        } if sender_ids else {}
+
+        items = [{
+            'id': message.id,
+            'chat': _chat_payload(chats.get(message.chat_id)),
+            'sender': _sender_payload(senders.get(message.sender_user_id)),
+            'telegram_message_id': message.telegram_message_id,
+            'message_date': _iso_dt(message.message_date),
+            'edit_date': _iso_dt(message.edit_date),
+            'raw_text': message.raw_text,
+            'normalized_text': message.normalized_text,
+            'reply_to_msg_id': message.reply_to_msg_id,
+            'views': message.views,
+            'forwards': message.forwards,
+            'has_media': message.has_media,
+            'media_type': message.media_type,
+            'meta_json': message.meta_json,
+            'created_at': _iso_dt(message.created_at),
+        } for message in messages]
+
+    return {'pagination': _pagination_meta(total, page, page_size), 'items': items}
+
+
+@app.get('/api/products')
+def api_products(
+    status: str | None = None,
+    chat_id: int | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    page, page_size = _normalize_pagination(page, page_size)
+    with session_scope() as db:
+        query = select(AiProduct).order_by(AiProduct.last_seen_at.desc())
+        if status in PRODUCT_STATUS_KEYS:
+            query = query.where(AiProduct.status == status)
+        if chat_id:
+            query = query.where(AiProduct.chat_id == chat_id)
+        if keyword and keyword.strip():
+            like = f'%{keyword.strip()}%'
+            query = query.where((AiProduct.product_name.like(like)) | (AiProduct.seller_contact.like(like)))
+
+        total = _query_total(db, query)
+        products = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        chat_ids = {p.chat_id for p in products}
+        chats = {
+            c.id: c for c in db.execute(select(MonitoredChat).where(MonitoredChat.id.in_(chat_ids))).scalars().all()
+        } if chat_ids else {}
+
+        items = [{
+            'id': product.id,
+            'chat': _chat_payload(chats.get(product.chat_id)),
+            'summary_id': product.summary_id,
+            'product_name': product.product_name,
+            'price_amount': product.price_amount,
+            'price_currency': product.price_currency,
+            'seller_contact': product.seller_contact,
+            'status': product.status,
+            'first_seen_at': _iso_dt(product.first_seen_at),
+            'last_seen_at': _iso_dt(product.last_seen_at),
+        } for product in products]
+
+    return {'pagination': _pagination_meta(total, page, page_size), 'items': items}
+
+
+@app.get('/api/contacts')
+def api_contacts(
+    contact_type: str | None = None,
+    chat_id: int | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    page, page_size = _normalize_pagination(page, page_size)
+    with session_scope() as db:
+        query = select(AiContact).order_by(AiContact.last_seen_at.desc())
+        if contact_type in CONTACT_TYPE_KEYS:
+            query = query.where(AiContact.contact_type == contact_type)
+        if chat_id:
+            query = query.where(AiContact.chat_id == chat_id)
+        if keyword and keyword.strip():
+            like = f'%{keyword.strip()}%'
+            query = query.where((AiContact.contact_value.like(like)) | (AiContact.context.like(like)))
+
+        total = _query_total(db, query)
+        contacts = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        chat_ids = {c.chat_id for c in contacts}
+        chats = {
+            c.id: c for c in db.execute(select(MonitoredChat).where(MonitoredChat.id.in_(chat_ids))).scalars().all()
+        } if chat_ids else {}
+
+        items = [{
+            'id': contact.id,
+            'chat': _chat_payload(chats.get(contact.chat_id)),
+            'summary_id': contact.summary_id,
+            'contact_type': contact.contact_type,
+            'contact_value': contact.contact_value,
+            'context': contact.context,
+            'first_seen_at': _iso_dt(contact.first_seen_at),
+            'last_seen_at': _iso_dt(contact.last_seen_at),
+        } for contact in contacts]
+
+    return {'pagination': _pagination_meta(total, page, page_size), 'items': items}
 
 
 @app.get('/contacts', response_class=HTMLResponse)

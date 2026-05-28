@@ -13,7 +13,7 @@ from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import User, Channel, Chat
 from sqlalchemy import select, func
 
-from .ai_service import run_summary_for_chat
+from .ai_service import extract_urls_from_text, run_summary_for_chat, run_url_classification_once, upsert_discovered_urls
 from .alerts import check_message_alerts
 from .db import session_scope
 from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary
@@ -39,25 +39,37 @@ class TelegramCollector:
     async def start(self) -> None:
         if self.started:
             return
-        if not settings.telegram_background_collection_enabled:
+        if settings.telegram_background_collection_enabled:
+            if settings.telegram_live_listener_enabled:
+                client = await telegram_session_manager.connect()
+                if client:
+                    await self._register_handler(client)
+            self.scheduler.add_job(self.ensure_connected, 'interval', minutes=1, id='ensure_connected', replace_existing=True)
+            self.scheduler.add_job(
+                self.backfill_all_active_chats,
+                'interval',
+                minutes=settings.sync_interval_minutes,
+                id='backfill_all',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+        else:
             logger.info('telegram background collection disabled; startup will not connect to Telegram')
-            self.started = True
-            return
-        if settings.telegram_live_listener_enabled:
-            client = await telegram_session_manager.connect()
-            if client:
-                await self._register_handler(client)
-        self.scheduler.add_job(self.ensure_connected, 'interval', minutes=1, id='ensure_connected', replace_existing=True)
-        self.scheduler.add_job(
-            self.backfill_all_active_chats,
-            'interval',
-            minutes=settings.sync_interval_minutes,
-            id='backfill_all',
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        self.scheduler.start()
+
+        if settings.url_classification_enabled:
+            self.scheduler.add_job(
+                run_url_classification_once,
+                'interval',
+                minutes=settings.url_classification_interval_minutes,
+                id='url_classification',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+
+        if self.scheduler.get_jobs():
+            self.scheduler.start()
         self.started = True
 
     async def stop(self) -> None:
@@ -135,37 +147,55 @@ class TelegramCollector:
                         self.scheduler.remove_job(job_id)
                     except Exception:
                         pass
-            return
+        else:
+            if self.scheduler.running:
+                self.scheduler.add_job(
+                    self.backfill_all_active_chats,
+                    'interval',
+                    minutes=settings.sync_interval_minutes,
+                    id='backfill_all',
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
+            else:
+                self.scheduler.add_job(self.ensure_connected, 'interval', minutes=1, id='ensure_connected', replace_existing=True)
+                self.scheduler.add_job(
+                    self.backfill_all_active_chats,
+                    'interval',
+                    minutes=settings.sync_interval_minutes,
+                    id='backfill_all',
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
 
-        if self.scheduler.running:
+            client = await telegram_session_manager.get_client()
+            if settings.telegram_live_listener_enabled:
+                if client and not self.handler_registered:
+                    await self._register_handler(client)
+            else:
+                await self._unregister_handler()
+
+        if settings.url_classification_enabled:
             self.scheduler.add_job(
-                self.backfill_all_active_chats,
+                run_url_classification_once,
                 'interval',
-                minutes=settings.sync_interval_minutes,
-                id='backfill_all',
+                minutes=settings.url_classification_interval_minutes,
+                id='url_classification',
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
             )
         else:
-            self.scheduler.add_job(self.ensure_connected, 'interval', minutes=1, id='ensure_connected', replace_existing=True)
-            self.scheduler.add_job(
-                self.backfill_all_active_chats,
-                'interval',
-                minutes=settings.sync_interval_minutes,
-                id='backfill_all',
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-            )
+            if self.scheduler.running:
+                try:
+                    self.scheduler.remove_job('url_classification')
+                except Exception:
+                    pass
+
+        if not self.scheduler.running and self.scheduler.get_jobs():
             self.scheduler.start()
-
-        client = await telegram_session_manager.get_client()
-        if settings.telegram_live_listener_enabled:
-            if client and not self.handler_registered:
-                await self._register_handler(client)
-        else:
-            await self._unregister_handler()
 
     async def sync_dialogs(self) -> int:
         client = await telegram_session_manager.connect()
@@ -355,6 +385,9 @@ class TelegramCollector:
             about = None
             logger.warning('fetch user about failed in persist_message: %s', exc)
 
+        about_urls_to_upsert = extract_urls_from_text(about)
+        should_upsert_about_urls = False
+        about_urls_chat_id: int | None = None
         persist_lock = self._persist_locks.setdefault(chat_telegram_id, asyncio.Lock())
         async with persist_lock:
             with session_scope() as db:
@@ -385,13 +418,15 @@ class TelegramCollector:
                         )
                         db.add(sender)
                         db.flush()
+                        should_upsert_about_urls = bool(about_urls_to_upsert)
                     else:
                         sender.username = getattr(tg_sender, 'username', sender.username)
                         sender.first_name = getattr(tg_sender, 'first_name', sender.first_name)
                         sender.last_name = getattr(tg_sender, 'last_name', sender.last_name)
                         sender.is_bot = getattr(tg_sender, 'bot', sender.is_bot)
-                        if about:
+                        if about and about != sender.about:
                             sender.about = about
+                            should_upsert_about_urls = bool(about_urls_to_upsert)
 
                 existing = db.execute(
                     select(Message).where(Message.chat_id == chat.id, Message.telegram_message_id == tg_message.id)
@@ -454,6 +489,17 @@ class TelegramCollector:
 
                 if trigger_ai and existing.id:
                     asyncio.create_task(self._try_trigger_summary(chat.id))
+
+                if should_upsert_about_urls:
+                    about_urls_chat_id = chat.id
+
+        if should_upsert_about_urls and about_urls_chat_id:
+            try:
+                inserted = upsert_discovered_urls(about_urls_to_upsert, category='other', chat_id=about_urls_chat_id)
+                if inserted:
+                    logger.info('profile URL discovery chat=%s urls=%d', about_urls_chat_id, inserted)
+            except Exception as exc:
+                logger.warning('profile URL discovery failed chat=%s: %s', about_urls_chat_id, exc)
 
 
     async def _try_trigger_summary(self, chat_id: int) -> None:

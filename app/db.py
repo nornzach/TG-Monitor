@@ -16,9 +16,10 @@ def init_database() -> None:
             f"CREATE DATABASE IF NOT EXISTS `{settings.database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
         ))
     admin_engine.dispose()
-    from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiProduct, AiContact, AlertRule, AlertMatch  # noqa
+    from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiUrlCategory, AiUrlClassificationRun, AiUrlClassification, AiProduct, AiContact, AlertRule, AlertMatch  # noqa
     Base.metadata.create_all(bind=engine)
     ensure_runtime_indexes()
+    seed_default_url_categories()
 
 
 def ensure_runtime_indexes() -> None:
@@ -48,6 +49,7 @@ def ensure_runtime_indexes() -> None:
     # Migrate AiUrl table - add new columns if they don't exist
     if inspector.has_table('ai_urls'):
         url_columns = {col['name'] for col in inspector.get_columns('ai_urls')}
+        url_indexes = {idx['name'] for idx in inspector.get_indexes('ai_urls')}
         if 'domain' not in url_columns:
             statements.append('ALTER TABLE ai_urls ADD COLUMN domain VARCHAR(255) NULL')
             statements.append('CREATE INDEX idx_ai_urls_domain ON ai_urls (domain)')
@@ -57,6 +59,25 @@ def ensure_runtime_indexes() -> None:
             statements.append('ALTER TABLE ai_urls ADD COLUMN chat_ids_seen JSON NULL')
         if 'reputation_score' not in url_columns:
             statements.append('ALTER TABLE ai_urls ADD COLUMN reputation_score FLOAT NULL')
+        if 'classification_status' not in url_columns:
+            statements.append("ALTER TABLE ai_urls ADD COLUMN classification_status VARCHAR(20) NOT NULL DEFAULT 'pending'")
+            statements.append('CREATE INDEX ix_ai_urls_classification_status ON ai_urls (classification_status)')
+        elif 'ix_ai_urls_classification_status' not in url_indexes:
+            statements.append('CREATE INDEX ix_ai_urls_classification_status ON ai_urls (classification_status)')
+        if 'primary_category_id' not in url_columns:
+            statements.append('ALTER TABLE ai_urls ADD COLUMN primary_category_id INT NULL')
+            statements.append('CREATE INDEX ix_ai_urls_primary_category_id ON ai_urls (primary_category_id)')
+        elif 'ix_ai_urls_primary_category_id' not in url_indexes:
+            statements.append('CREATE INDEX ix_ai_urls_primary_category_id ON ai_urls (primary_category_id)')
+        if 'classification_run_id' not in url_columns:
+            statements.append('ALTER TABLE ai_urls ADD COLUMN classification_run_id INT NULL')
+            statements.append('CREATE INDEX ix_ai_urls_classification_run_id ON ai_urls (classification_run_id)')
+        elif 'ix_ai_urls_classification_run_id' not in url_indexes:
+            statements.append('CREATE INDEX ix_ai_urls_classification_run_id ON ai_urls (classification_run_id)')
+        if 'classified_at' not in url_columns:
+            statements.append('ALTER TABLE ai_urls ADD COLUMN classified_at DATETIME NULL')
+        if 'classification_error' not in url_columns:
+            statements.append('ALTER TABLE ai_urls ADD COLUMN classification_error TEXT NULL')
 
     if not statements:
         return
@@ -64,6 +85,37 @@ def ensure_runtime_indexes() -> None:
     with engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+
+
+def seed_default_url_categories() -> None:
+    from .models import AiUrlCategory
+
+    defaults = [
+        ('telegram_group', 'Telegram 群组/频道', 't.me 群组、频道、加群邀请链接'),
+        ('cloud_drive', '网盘/文件分享', '夸克网盘、百度网盘、阿里云盘等文件分享链接'),
+        ('code_repository', '代码仓库/项目', 'GitHub、GitLab、Gitee 等代码项目地址'),
+        ('relay_service', '中转/节点服务', '节点销售、VPS、代理、VPN、流量转发服务'),
+        ('account_seller', '账号/号码交易', 'Telegram 账号、号码、接码、实名账号交易'),
+        ('payment_store', '支付/店铺链接', '支付页面、店铺、商品购买或充值链接'),
+        ('ai_tool', 'AI 工具/模型服务', 'AI 工具、模型 API、提示词或自动化服务'),
+        ('documentation', '文档/教程', '文档、教程、博客文章、说明页面'),
+        ('social_profile', '社交主页', '个人主页、社交媒体主页或联系方式页'),
+        ('generic_link', '普通链接', '不能归入更细类别的普通网页'),
+        ('other', '其他', '无法判断或暂不适合细分的链接'),
+    ]
+    with SessionLocal() as session:
+        existing = {row.slug for row in session.query(AiUrlCategory).all()}
+        for slug, name, description in defaults:
+            if slug in existing:
+                continue
+            session.add(AiUrlCategory(
+                slug=slug,
+                name=name,
+                description=description,
+                source='seed',
+                is_active=True,
+            ))
+        session.commit()
 
 
 @contextmanager

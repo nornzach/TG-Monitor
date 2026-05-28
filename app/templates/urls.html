@@ -4,103 +4,144 @@
 <div class="page-header">
   <div>
     <h2>{{ t('urls.title') }}</h2>
-    <div class="page-desc">{{ t('urls.desc') }}</div>
+    <div class="page-desc">已收录 URL 的粗分类、AI 二次分类和批次状态</div>
   </div>
 </div>
 
 <div class="cards">
   <div class="card">
     <div class="card-icon blue">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
     </div>
     <div class="label">{{ t('urls.total_urls') }}</div>
     <div class="value">{{ reputation.total }}</div>
   </div>
   <div class="card">
     <div class="card-icon green">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
     </div>
-    <div class="label">{{ t('urls.high_reputation') }}</div>
-    <div class="value">{{ reputation.high }}</div>
+    <div class="label">已二次分类</div>
+    <div class="value">{{ status_counts.get('classified', 0) }}</div>
   </div>
   <div class="card">
     <div class="card-icon amber">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
     </div>
-    <div class="label">{{ t('urls.medium_reputation') }}</div>
-    <div class="value">{{ reputation.medium }}</div>
+    <div class="label">待分类</div>
+    <div class="value">{{ pending_classification_count }}</div>
   </div>
   <div class="card">
     <div class="card-icon red">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
     </div>
-    <div class="label">{{ t('urls.low_reputation') }}</div>
-    <div class="value">{{ reputation.low }}</div>
+    <div class="label">分类失败</div>
+    <div class="value">{{ status_counts.get('failed', 0) }}</div>
   </div>
 </div>
 
-<div class="grid-2">
-  <div class="panel">
-    <h3>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-      {{ t('urls.domain_frequency') }}
-    </h3>
-    {% if domain_stats %}
-    <div class="chart-container">
-      <canvas id="domainChart"></canvas>
-    </div>
-    {% else %}
-    <div class="empty-state">
-      <div class="empty-icon">📊</div>
-      <div class="empty-title">{{ t('common.no_data') }}</div>
-    </div>
-    {% endif %}
-  </div>
-
-  <div class="panel">
-    <h3>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-      {{ t('urls.category_distribution') }}
-    </h3>
-    {% if counts.values()|sum > 0 %}
-    <div class="chart-container">
-      <canvas id="categoryChart"></canvas>
-    </div>
-    {% else %}
-    <div class="empty-state">
-      <div class="empty-icon">📊</div>
-      <div class="empty-title">{{ t('common.no_data') }}</div>
-    </div>
-    {% endif %}
+<div class="panel" style="padding: 16px;">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+    <form action="/urls/classify-now" method="post" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+      <input type="number" name="batch_size" min="1" max="200" value="{{ url_classification_batch_size }}" style="width: 100px;">
+      <label class="checkbox-label" style="margin: 0;">
+        <input type="checkbox" name="include_classified" value="true">
+        重分已分类
+      </label>
+      <button type="submit" class="btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        立即分类一批
+      </button>
+    </form>
+    <a class="btn btn-secondary" href="/settings">编辑分类提示词</a>
   </div>
 </div>
 
-{% if cross_chat_urls %}
-<div class="panel">
-  <h3>
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-    {{ t('urls.cross_chat_urls') }} <span class="badge badge-blue">{{ cross_chat_urls|length }}</span>
-  </h3>
+<div class="panel" style="padding: 16px;">
+  <form method="get" action="/urls#url-list" class="form-vertical">
+    <div style="display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(150px, 1fr)); gap: 12px;">
+      <div class="form-group">
+        <label>URL / 域名</label>
+        <input type="text" name="keyword" value="{{ keyword }}" placeholder="搜索 URL 或域名">
+      </div>
+      <div class="form-group">
+        <label>原始粗分类</label>
+        <select name="category">
+          <option value="">全部</option>
+          {% for cat in order %}
+          <option value="{{ cat }}" {% if selected_category == cat %}selected{% endif %}>{{ labels[cat] }} ({{ counts[cat] }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>AI 动态分类</label>
+        <select name="ai_category_id">
+          <option value="">全部</option>
+          {% for cat in ai_categories %}
+          <option value="{{ cat.id }}" {% if selected_ai_category_id == cat.id %}selected{% endif %}>{{ cat.name }} ({{ ai_category_counts.get(cat.id, 0) }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>处理状态</label>
+        <select name="classification_status">
+          <option value="">全部</option>
+          <option value="pending" {% if selected_classification_status == 'pending' %}selected{% endif %}>待处理</option>
+          <option value="running" {% if selected_classification_status == 'running' %}selected{% endif %}>运行中</option>
+          <option value="classified" {% if selected_classification_status == 'classified' %}selected{% endif %}>已分类</option>
+          <option value="failed" {% if selected_classification_status == 'failed' %}selected{% endif %}>失败</option>
+        </select>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 8px;">
+        <button type="submit">{{ t('common.filter') }}</button>
+        <a class="btn btn-secondary" href="/urls#url-list">{{ t('common.reset') }}</a>
+      </div>
+      <div style="font-size: 13px; color: var(--text-secondary);">
+        当前筛选结果：<strong style="color: var(--text-primary);">{{ total_count }}</strong> / {{ reputation.total }}
+      </div>
+    </div>
+  </form>
+</div>
+
+{% if ai_categories %}
+<div class="panel" style="padding: 16px;">
+  <div class="filter-tabs">
+    <a class="filter-tab {% if not selected_ai_category_id %}active{% endif %}" href="/urls#url-list">全部细分类<span class="count">{{ reputation.total }}</span></a>
+    {% for cat in ai_categories %}
+    {% if ai_category_counts.get(cat.id, 0) > 0 %}
+    <a class="filter-tab {% if selected_ai_category_id == cat.id %}active{% endif %}" href="/urls?ai_category_id={{ cat.id }}#url-list">
+      {{ cat.name }}<span class="count">{{ ai_category_counts.get(cat.id, 0) }}</span>
+    </a>
+    {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if recent_classification_runs %}
+<div class="panel" id="url-list">
+  <h3 style="margin-bottom: 12px;">最近分类批次</h3>
   <table>
     <thead>
       <tr>
-        <th>URL</th>
-        <th>{{ t('urls.domain') }}</th>
-        <th>{{ t('common.category') }}</th>
-        <th>{{ t('urls.appearance_count') }}</th>
-        <th>{{ t('urls.chat_count') }}</th>
+        <th>ID</th>
+        <th>{{ t('common.status') }}</th>
+        <th>处理</th>
+        <th>新增分类</th>
+        <th>{{ t('common.time') }}</th>
+        <th>错误</th>
       </tr>
     </thead>
     <tbody>
-      {% for u in cross_chat_urls %}
+      {% for run in recent_classification_runs %}
       <tr>
-        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          <a href="{{ u.url }}" target="_blank" rel="noopener" style="color: var(--primary);">{{ u.title or u.url[:60] }}</a>
-        </td>
-        <td><code style="font-size: 12px;">{{ u.domain or '-' }}</code></td>
-        <td><span class="badge">{{ u.category or '-' }}</span></td>
-        <td style="font-variant-numeric: tabular-nums;">{{ u.appearance_count }}</td>
-        <td style="font-variant-numeric: tabular-nums;">{{ u.chat_count }}</td>
+        <td>#{{ run.id }}</td>
+        <td><span class="badge">{{ run.status }}</span></td>
+        <td>{{ run.processed_urls }} / {{ run.total_urls }}</td>
+        <td>{{ run.created_categories }}</td>
+        <td>{{ run.started_at | to_beijing }}</td>
+        <td style="max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ run.error_message or '-' }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -108,107 +149,95 @@
 </div>
 {% endif %}
 
-<div class="panel" style="padding: 16px;">
-  <div class="filter-tabs">
-    <a class="filter-tab {% if not selected_category %}active{% endif %}" href="/urls">
-      {{ t('common.all') }}<span class="count">{{ counts.values()|sum }}</span>
-    </a>
-    {% for cat in order %}
-    <a class="filter-tab {% if selected_category == cat %}active{% endif %}" href="/urls?category={{ cat }}">
-      {{ labels[cat] }}<span class="count">{{ counts[cat] }}</span>
-    </a>
-    {% endfor %}
-  </div>
-</div>
-
-{% if total_pages > 1 %}
-<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
-  <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
-  <div class="pagination">
-    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
-    {% if has_prev %}
-    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&page={{ page - 1 }}">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-      {{ t('common.prev') }}
-    </a>
-    {% endif %}
-    {% if has_next %}
-    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&page={{ page + 1 }}">
-      {{ t('common.next') }}
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </a>
-    {% endif %}
-  </div>
+{% if cross_chat_urls %}
+<div class="panel">
+  <h3 style="margin-bottom: 12px;">{{ t('urls.cross_chat_urls') }} <span class="badge badge-blue">{{ cross_chat_urls|length }}</span></h3>
+  <table>
+    <thead>
+      <tr>
+        <th>URL</th>
+        <th>{{ t('urls.domain') }}</th>
+        <th>{{ t('common.category') }}</th>
+        <th>{{ t('urls.appearance_count') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in cross_chat_urls %}
+      <tr>
+        <td style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <a href="{{ u.url | safe_url }}" target="_blank" rel="noopener" style="color: var(--primary);">{{ u.title or u.url }}</a>
+        </td>
+        <td><code style="font-size: 12px;">{{ u.domain or '-' }}</code></td>
+        <td><span class="badge">{{ u.category or '-' }}</span></td>
+        <td>{{ u.appearance_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endif %}
 
-{% if not selected_category %}
-  {% for cat in order %}
-    {% set cat_urls = urls|selectattr('category', 'equalto', cat)|list %}
-    {% if cat_urls %}
-    <div class="panel">
-      <h3 style="margin-bottom: 12px;">{{ labels[cat] }} <span class="badge badge-blue" style="margin-left: 4px;">{{ cat_urls|length }}</span></h3>
-      {% for u in cat_urls %}
-      <div class="url-item">
-        <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
-          <a href="{{ u.url | safe_url }}" target="_blank" rel="noopener" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ u.url }}</a>
-          {% if u.domain %}<code style="font-size: 11px; color: var(--text-muted); white-space: nowrap;">{{ u.domain }}</code>{% endif %}
-        </div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          {% if u.reputation_score is not none %}
-            {% if u.reputation_score >= 0.7 %}
-            <span class="badge badge-green" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.high') }}</span>
-            {% elif u.reputation_score >= 0.3 %}
-            <span class="badge badge-amber" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.medium') }}</span>
-            {% else %}
-            <span class="badge badge-red" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.low') }}</span>
-            {% endif %}
+<div class="panel">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 0;">
+    <h3>URL 列表</h3>
+    <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
+  </div>
+  {% if urls %}
+  <table>
+    <thead>
+      <tr>
+        <th>URL</th>
+        <th>域名</th>
+        <th>原始分类</th>
+        <th>AI 分类</th>
+        <th>状态</th>
+        <th>出现</th>
+        <th>最近出现</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in urls %}
+      {% set primary_category = ai_category_map.get(u.primary_category_id) if u.primary_category_id else none %}
+      <tr>
+        <td style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <a href="{{ u.url | safe_url }}" target="_blank" rel="noopener" style="color: var(--primary);">{{ u.url }}</a>
+          {% if u.classification_error %}
+          <div style="font-size: 11px; color: var(--red); margin-top: 4px;">{{ u.classification_error }}</div>
           {% endif %}
-          <span class="url-date">{{ u.first_seen_at | to_beijing }}</span>
-        </div>
-      </div>
+        </td>
+        <td><code style="font-size: 12px;">{{ u.domain or '-' }}</code></td>
+        <td><span class="badge">{{ labels.get(u.category, u.category) }}</span></td>
+        <td>
+          {% if primary_category %}
+          <span class="badge badge-blue">{{ primary_category.name }}</span>
+          {% else %}
+          <span style="color: var(--text-muted);">-</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if u.classification_status == 'classified' %}
+          <span class="badge badge-green">已分类</span>
+          {% elif u.classification_status == 'running' %}
+          <span class="badge badge-amber">运行中</span>
+          {% elif u.classification_status == 'failed' %}
+          <span class="badge badge-red">失败</span>
+          {% else %}
+          <span class="badge">待处理</span>
+          {% endif %}
+        </td>
+        <td>{{ u.appearance_count }}</td>
+        <td>{{ u.last_seen_at | to_beijing }}</td>
+      </tr>
       {% endfor %}
-    </div>
-    {% endif %}
-  {% endfor %}
-  {% if not urls %}
-  <div class="panel">
-    <div class="empty-state">
-      <div class="empty-icon">🔗</div>
-      <div class="empty-title">{{ t('urls.no_urls') }}</div>
-      <div class="empty-desc">{{ t('urls.no_urls_desc') }}</div>
-    </div>
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-title">{{ t('urls.no_urls') }}</div>
+    <div class="empty-desc">{{ t('urls.no_urls_desc') }}</div>
   </div>
   {% endif %}
-{% else %}
-  <div class="panel">
-    {% for u in urls %}
-    <div class="url-item">
-      <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
-        <a href="{{ u.url }}" target="_blank" rel="noopener" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ u.url }}</a>
-        {% if u.domain %}<code style="font-size: 11px; color: var(--text-muted); white-space: nowrap;">{{ u.domain }}</code>{% endif %}
-      </div>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        {% if u.reputation_score is not none %}
-          {% if u.reputation_score >= 0.7 %}
-          <span class="badge badge-green" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.high') }}</span>
-          {% elif u.reputation_score >= 0.3 %}
-          <span class="badge badge-amber" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.medium') }}</span>
-          {% else %}
-          <span class="badge badge-red" title="{{ t('urls.reputation_score') }}: {{ u.reputation_score }}">{{ t('common.low') }}</span>
-          {% endif %}
-        {% endif %}
-        <span class="url-date">{{ u.first_seen_at | to_beijing }}</span>
-      </div>
-    </div>
-    {% else %}
-    <div class="empty-state">
-      <div class="empty-icon">🔗</div>
-      <div class="empty-title">{{ t('urls.no_category_urls') }}</div>
-    </div>
-    {% endfor %}
-  </div>
-{% endif %}
+</div>
 
 {% if total_pages > 1 %}
 <div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
@@ -216,106 +245,12 @@
   <div class="pagination">
     <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
     {% if has_prev %}
-    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&page={{ page - 1 }}">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-      {{ t('common.prev') }}
-    </a>
+    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&ai_category_id={{ selected_ai_category_id or '' }}&classification_status={{ selected_classification_status or '' }}&keyword={{ keyword }}&page={{ page - 1 }}">{{ t('common.prev') }}</a>
     {% endif %}
     {% if has_next %}
-    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&page={{ page + 1 }}">
-      {{ t('common.next') }}
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </a>
+    <a class="btn btn-sm btn-secondary" href="/urls?category={{ selected_category or '' }}&ai_category_id={{ selected_ai_category_id or '' }}&classification_status={{ selected_classification_status or '' }}&keyword={{ keyword }}&page={{ page + 1 }}">{{ t('common.next') }}</a>
     {% endif %}
   </div>
 </div>
-{% endif %}
-{% endblock %}
-
-{% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-{% if domain_stats %}
-<script>
-(function() {
-  const labels = [{% for d in domain_stats %}'{{ d.domain }}'{% if not loop.last %},{% endif %}{% endfor %}];
-  const data = [{% for d in domain_stats %}{{ d.count }}{% if not loop.last %},{% endif %}{% endfor %}];
-  const ctx = document.getElementById('domainChart').getContext('2d');
-  new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [{
-        data: data,
-        backgroundColor: 'rgba(79, 70, 229, 0.7)',
-        hoverBackgroundColor: 'rgba(79, 70, 229, 0.9)',
-        borderRadius: 6,
-        borderSkipped: false,
-      }]
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#0f172a',
-          padding: 10,
-          cornerRadius: 8,
-          displayColors: false,
-        }
-      },
-      scales: {
-        x: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8' }, border: { display: false }, beginAtZero: true },
-        y: { grid: { display: false }, ticks: { color: '#94a3b8' }, border: { display: false } }
-      }
-    }
-  });
-})();
-</script>
-{% endif %}
-{% if counts.values()|sum > 0 %}
-<script>
-(function() {
-  const labels = [{% for cat in order %}'{{ labels[cat] }}'{% if not loop.last %},{% endif %}{% endfor %}];
-  const data = [{% for cat in order %}{{ counts[cat] }}{% if not loop.last %},{% endif %}{% endfor %}];
-  const colors = ['rgba(79, 70, 229, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)', 'rgba(239, 68, 68, 0.8)', 'rgba(107, 114, 128, 0.8)'];
-  const ctx = document.getElementById('categoryChart').getContext('2d');
-  new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      labels: labels,
-      datasets: [{
-        data: data,
-        backgroundColor: colors.slice(0, data.length),
-        borderWidth: 0,
-        hoverOffset: 4,
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'bottom',
-          labels: {
-            color: '#64748b',
-            padding: 16,
-            usePointStyle: true,
-            pointStyleWidth: 10,
-          }
-        },
-        tooltip: {
-          backgroundColor: '#0f172a',
-          padding: 10,
-          cornerRadius: 8,
-          displayColors: false,
-        }
-      },
-      cutout: '60%',
-    }
-  });
-})();
-</script>
 {% endif %}
 {% endblock %}
