@@ -39,10 +39,17 @@ class Settings(BaseSettings):
     url_classification_enabled: bool = True
     url_classification_interval_minutes: int = 30
     url_classification_batch_size: int = 50
+    key_lead_analysis_enabled: bool = True
+    key_lead_analysis_interval_minutes: int = 30
+    key_lead_analysis_batch_size: int = 200
     telegram_download_media_enabled: bool = False
     telegram_fetch_user_about_enabled: bool = False
     stopwords_extra: str = ''
     media_storage_path: str = './data/media'
+
+    # Auth
+    auth_password: str = ''
+    api_sk: str = ''
 
     @field_validator('telegram_api_id', mode='before')
     @classmethod

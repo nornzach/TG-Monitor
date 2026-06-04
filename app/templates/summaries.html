@@ -59,8 +59,8 @@
         {% if s.triggered_at %} · {{ s.triggered_at | to_beijing }}{% endif %}
       </span>
       <div style="display: flex; gap: 4px;">
-        <form action="/summaries/{{ s.id }}/rerun" method="post" style="display: inline;">
-          <button class="btn btn-xs btn-secondary" type="submit" title="{{ t('summaries.rerun') }}">{{ t('summaries.rerun') }}</button>
+        <form action="/summaries/{{ s.id }}/rerun" method="post" data-loading-form style="display: inline;">
+          <button class="btn btn-xs btn-secondary" type="submit" title="{{ t('summaries.rerun') }}" data-loading-text="提交中...">{{ t('summaries.rerun') }}</button>
         </form>
         <form action="/summaries/{{ s.id }}/delete" method="post" style="display: inline;" onsubmit="return confirm('{{ t('summaries.confirm_delete') }}');">
           <button class="btn btn-xs btn-danger" type="submit" title="{{ t('summaries.delete') }}">{{ t('summaries.delete') }}</button>

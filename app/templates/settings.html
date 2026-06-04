@@ -190,6 +190,23 @@
         </div>
       </div>
 
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
+        <label class="checkbox-label">
+          <input type="checkbox" name="key_lead_analysis_enabled" value="true" {% if key_lead_analysis_enabled %}checked{% endif %}>
+          Key 商线索分析
+        </label>
+        <div class="form-group">
+          <label>Key 商分析间隔（分钟）</label>
+          <input type="number" name="key_lead_analysis_interval_minutes" min="1" max="1440" value="{{ key_lead_analysis_interval_minutes }}">
+          <span class="help-text">定时扫描聊天记录，只保留原厂 API key/free credits 号线索</span>
+        </div>
+        <div class="form-group">
+          <label>Key 商分析批量</label>
+          <input type="number" name="key_lead_analysis_batch_size" min="1" max="500" value="{{ key_lead_analysis_batch_size }}">
+          <span class="help-text">默认 200 条消息一批，越大单次 token 越多</span>
+        </div>
+      </div>
+
       <button type="submit">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
         {{ t('settings.save_collection') }}

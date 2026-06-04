@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ t('login.title') }} - TG Monitor</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body {
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .login-container {
+      width: 100%;
+      max-width: 380px;
+      padding: 24px;
+    }
+    .login-card {
+      background: var(--surface);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 40px 32px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .login-header .logo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      background: var(--primary);
+      color: #fff;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 18px;
+      margin-bottom: 16px;
+    }
+    .login-header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0 0 4px;
+      color: var(--text);
+    }
+    .login-header p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+    .login-form .form-group {
+      margin-bottom: 20px;
+    }
+    .login-form label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+    .login-form input[type="password"] {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s;
+      box-sizing: border-box;
+    }
+    .login-form input[type="password"]:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+    }
+    .login-form button {
+      width: 100%;
+      padding: 11px 20px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .login-form button:hover {
+      background: var(--primary-hover);
+    }
+    .login-form button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .login-error {
+      background: var(--red-bg);
+      color: var(--red);
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+      display: none;
+    }
+    .login-error.visible {
+      display: block;
+    }
+    .login-footer {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .lang-switch {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 13px;
+    }
+    .lang-switch a {
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 0 6px;
+    }
+    .lang-switch a:hover {
+      color: var(--primary);
+    }
+    .lang-switch a.active {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .lang-switch .sep {
+      color: var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="logo">TG</div>
+        <h1>{{ t('login.title') }}</h1>
+        <p>{{ t('login.subtitle') }}</p>
+      </div>
+
+      {% if error %}
+      <div class="login-error visible">{{ error }}</div>
+      {% endif %}
+
+      <form class="login-form" method="post" action="/login" data-loading-form>
+        <div class="form-group">
+          <label for="password">{{ t('login.password_label') }}</label>
+          <input type="password" id="password" name="password"
+                 placeholder="{{ t('login.placeholder_password') }}"
+                 autofocus required>
+        </div>
+        <button type="submit" data-loading-text="{{ t('common.loading') }}">
+          {{ t('login.submit') }}
+        </button>
+      </form>
+    </div>
+
+    <div class="lang-switch">
+      <a href="/lang/zh?next=/login" class="{% if get_lang(request) == 'zh' %}active{% endif %}">中文</a>
+      <span class="sep">|</span>
+      <a href="/lang/en?next=/login" class="{% if get_lang(request) == 'en' %}active{% endif %}">EN</a>
+    </div>
+
+    <div class="login-footer">TG Monitor Platform v1.0</div>
+  </div>
+</body>
+</html>

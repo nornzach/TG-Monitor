@@ -16,7 +16,7 @@ def init_database() -> None:
             f"CREATE DATABASE IF NOT EXISTS `{settings.database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
         ))
     admin_engine.dispose()
-    from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiUrlCategory, AiUrlClassificationRun, AiUrlClassification, AiProduct, AiContact, AlertRule, AlertMatch  # noqa
+    from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiUrlCategory, AiUrlClassificationRun, AiUrlClassification, AiProduct, AiContact, AiKeyLeadRun, AiKeyLead, AlertRule, AlertMatch  # noqa
     Base.metadata.create_all(bind=engine)
     ensure_runtime_indexes()
     seed_default_url_categories()
@@ -78,6 +78,22 @@ def ensure_runtime_indexes() -> None:
             statements.append('ALTER TABLE ai_urls ADD COLUMN classified_at DATETIME NULL')
         if 'classification_error' not in url_columns:
             statements.append('ALTER TABLE ai_urls ADD COLUMN classification_error TEXT NULL')
+
+    if inspector.has_table('ai_key_leads'):
+        key_lead_columns = {col['name'] for col in inspector.get_columns('ai_key_leads')}
+        key_lead_indexes = {idx['name'] for idx in inspector.get_indexes('ai_key_leads')}
+        if 'seller_telegram_id' not in key_lead_columns:
+            statements.append('ALTER TABLE ai_key_leads ADD COLUMN seller_telegram_id BIGINT NULL')
+            statements.append('CREATE INDEX ix_ai_key_leads_seller_telegram_id ON ai_key_leads (seller_telegram_id)')
+        elif 'ix_ai_key_leads_seller_telegram_id' not in key_lead_indexes:
+            statements.append('CREATE INDEX ix_ai_key_leads_seller_telegram_id ON ai_key_leads (seller_telegram_id)')
+        if 'seller_username' not in key_lead_columns:
+            statements.append('ALTER TABLE ai_key_leads ADD COLUMN seller_username VARCHAR(255) NULL')
+            statements.append('CREATE INDEX ix_ai_key_leads_seller_username ON ai_key_leads (seller_username)')
+        elif 'ix_ai_key_leads_seller_username' not in key_lead_indexes:
+            statements.append('CREATE INDEX ix_ai_key_leads_seller_username ON ai_key_leads (seller_username)')
+        if 'seller_display_name' not in key_lead_columns:
+            statements.append('ALTER TABLE ai_key_leads ADD COLUMN seller_display_name VARCHAR(255) NULL')
 
     if not statements:
         return

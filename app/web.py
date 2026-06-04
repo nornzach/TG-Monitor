@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Form
+from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import select, desc, func
 
 from . import analysis
 from .analysis import dashboard_metrics, chat_statistics, system_status
-from .ai_service import PROVIDER_CONFIGS, get_ai_provider_config, get_url_classification_prompt, run_summary_now, run_url_classification_once
+from .ai_service import PROVIDER_CONFIGS, get_ai_provider_config, get_url_classification_prompt, run_key_lead_analysis_once, run_summary_now, run_url_classification_once
 from .collector import collector
 from .config import settings, BASE_DIR
 from .db import init_database, session_scope
-from .models import MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact, AlertRule, AlertMatch
+from .models import MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact, AiKeyLead, AiKeyLeadRun, AlertRule, AlertMatch
 from .telegram_client import telegram_session_manager
 
 # ==================== i18n ====================
@@ -80,6 +84,85 @@ def _env_bool(value: bool) -> str:
     return 'true' if value else 'false'
 
 
+# ==================== Authentication ====================
+
+_AUTH_SECRET = secrets.token_hex(32)
+
+
+def _make_auth_token() -> str:
+    return hashlib.sha256(f"{settings.auth_password}:{_AUTH_SECRET}".encode()).hexdigest()
+
+
+def _check_auth_cookie(request: Request) -> bool:
+    token = request.cookies.get('auth_token')
+    if not token:
+        return False
+    expected = _make_auth_token()
+    return secrets.compare_digest(token, expected)
+
+
+def _check_api_sk(request: Request) -> bool:
+    sk = request.headers.get('x-api-key', '')
+    if not sk:
+        return False
+    return secrets.compare_digest(sk.strip(), settings.api_sk)
+
+
+_PUBLIC_PATHS = {'/login', '/logout'}
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware for page-level cookie auth and API key auth."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Static/media/lang paths — always allow
+        if path.startswith(('/static/', '/media/', '/lang/')):
+            return await call_next(request)
+
+        # Login/logout paths — always allow
+        if path in _PUBLIC_PATHS:
+            return await call_next(request)
+
+        # API routes — check X-API-Key header
+        if path.startswith('/api/'):
+            if _check_api_sk(request):
+                return await call_next(request)
+            return JSONResponse(
+                {'error': 'Unauthorized', 'message': 'Missing or invalid API key (X-API-Key header)'},
+                status_code=401,
+            )
+
+        # All other routes — check auth cookie
+        # Also skip auth for the language-switch redirect (it's handled below)
+        if _check_auth_cookie(request):
+            return await call_next(request)
+
+        # Not authenticated — redirect to login
+        # For POST requests, try Referer header for next, fallback to /
+        if request.method == 'POST':
+            ref = request.headers.get('referer', '')
+            if ref.startswith('/'):
+                next_url = ref
+            else:
+                # Only keep path portion from absolute URLs
+                from urllib.parse import urlparse
+                parsed = urlparse(ref)
+                next_url = parsed.path if parsed.path.startswith('/') else '/'
+            from urllib.parse import quote
+            return RedirectResponse(f'/login?next={quote(next_url)}', status_code=303)
+
+        # For GET requests, preserve the original URL as next
+        next_url = str(request.url.path)
+        if request.url.query:
+            next_url += '?' + request.url.query
+        return RedirectResponse(f'/login?next={__import__("urllib.parse").quote(next_url)}', status_code=303)
+
+
+# ==================== i18n ====================
+
+
 def _update_env_file(updates: dict[str, str]) -> None:
     env_path = BASE_DIR / '.env'
     lock_path = BASE_DIR / 'data' / '.env.lock'
@@ -118,6 +201,15 @@ def _normalize_pagination(page: int, page_size: int, max_page_size: int = 200) -
     page = max(page, 1)
     page_size = min(max(page_size, 1), max_page_size)
     return page, page_size
+
+
+def _parse_optional_int(value: int | str | None) -> int | None:
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _pagination_meta(total: int, page: int, page_size: int) -> dict:
@@ -162,6 +254,30 @@ def _sender_payload(sender: TelegramUser | None) -> dict | None:
     }
 
 
+async def _run_url_classification_background(batch_size: int, include_classified: bool) -> None:
+    try:
+        result = await run_url_classification_once(batch_size=batch_size, include_classified=include_classified)
+        logger.info('background URL classification finished: %s', result)
+    except Exception:
+        logger.exception('background URL classification failed')
+
+
+async def _run_summary_now_background(chat_id: int, source: str) -> None:
+    try:
+        summary_id = await run_summary_now(chat_id)
+        logger.info('background AI summary finished source=%s chat=%s summary=%s', source, chat_id, summary_id)
+    except Exception:
+        logger.exception('background AI summary failed source=%s chat=%s', source, chat_id)
+
+
+async def _run_key_lead_analysis_background(batch_size: int | None = None) -> None:
+    try:
+        result = await run_key_lead_analysis_once(batch_size=batch_size)
+        logger.info('background key lead analysis finished: %s', result)
+    except Exception:
+        logger.exception('background key lead analysis failed')
+
+
 def _acquire_instance_lock() -> None:
     global _instance_lock_file
     lock_path = BASE_DIR / 'data' / 'tg-monitor-platform.lock'
@@ -203,6 +319,7 @@ async def lifespan(app_instance: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
 settings.resolved_media_storage_path.mkdir(parents=True, exist_ok=True)
 app.mount('/static', StaticFiles(directory=str(BASE_DIR / 'app' / 'static')), name='static')
 app.mount('/media', StaticFiles(directory=str(settings.resolved_media_storage_path)), name='media')
@@ -213,10 +330,64 @@ _load_i18n()
 
 @app.get('/lang/{code}')
 def switch_language(code: str, request: Request):
-    referer = request.headers.get('referer', '/')
-    resp = RedirectResponse(referer, status_code=303)
+    # Support ?next= for explicit redirect target (login page etc.)
+    next_url = request.query_params.get('next', '')
+    if next_url and next_url.startswith('/'):
+        target = next_url
+    else:
+        target = request.headers.get('referer', '/')
+    resp = RedirectResponse(target, status_code=303)
     if code in _I18N_DATA:
         resp.set_cookie('lang', code, max_age=86400 * 365)
+    return resp
+
+
+# ==================== Login / Logout ====================
+
+
+@app.get('/login', response_class=HTMLResponse)
+def login_page(request: Request):
+    # If already authenticated, redirect to home
+    if _check_auth_cookie(request):
+        return RedirectResponse('/', status_code=303)
+
+    error = request.query_params.get('error', '')
+    error_msg = _t(request, 'login.error_invalid') if error == 'invalid' else ''
+    return templates.TemplateResponse(
+        request=request,
+        name='login.html',
+        context={
+            'request': request,
+            'error': error_msg,
+        },
+    )
+
+
+@app.post('/login')
+def login_submit(request: Request, password: str = Form(default='')):
+    if secrets.compare_digest(password.strip(), settings.auth_password):
+        # Validate next is a safe relative path (prevent open redirect)
+        next_url = request.query_params.get('next', '/')
+        if not next_url.startswith('/'):
+            next_url = '/'
+        resp = RedirectResponse(next_url, status_code=303)
+        # Use secure=True when the request arrived over HTTPS
+        is_secure = request.url.scheme == 'https'
+        resp.set_cookie(
+            'auth_token', _make_auth_token(),
+            max_age=86400 * 30,
+            httponly=True,
+            samesite='lax',
+            secure=is_secure,
+        )
+        return resp
+    return RedirectResponse('/login?error=invalid', status_code=303)
+
+
+@app.get('/logout')
+def logout():
+    resp = RedirectResponse('/login', status_code=303)
+    resp.delete_cookie('auth_token', path='/')
     return resp
 
 
@@ -404,14 +575,15 @@ async def sync_dialogs(request: Request):
 
 
 @app.get('/messages', response_class=HTMLResponse)
-def messages_page(request: Request, chat_id: int | None = None, keyword: str | None = None, media_only: bool = False, sender: str | None = None, page: int = 1):
+def messages_page(request: Request, chat_id: str | None = None, keyword: str | None = None, media_only: bool = False, sender: str | None = None, page: int = 1):
     page_size = 50
     page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         chats = db.execute(select(MonitoredChat).order_by(MonitoredChat.title.asc())).scalars().all()
         query = select(Message)
-        if chat_id:
-            query = query.where(Message.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(Message.chat_id == selected_chat_id)
         if keyword:
             query = query.where(Message.normalized_text.like(f'%{keyword}%'))
         if media_only:
@@ -474,7 +646,7 @@ def messages_page(request: Request, chat_id: int | None = None, keyword: str | N
             'request': request,
             'messages': message_rows,
             'chats': chats,
-            'selected_chat_id': chat_id,
+            'selected_chat_id': selected_chat_id,
             'keyword': keyword or '',
             'media_only': media_only,
             'sender': sender or '',
@@ -553,6 +725,9 @@ async def settings_page(request: Request):
             'url_classification_enabled': settings.url_classification_enabled,
             'url_classification_interval_minutes': settings.url_classification_interval_minutes,
             'url_classification_batch_size': settings.url_classification_batch_size,
+            'key_lead_analysis_enabled': settings.key_lead_analysis_enabled,
+            'key_lead_analysis_interval_minutes': settings.key_lead_analysis_interval_minutes,
+            'key_lead_analysis_batch_size': settings.key_lead_analysis_batch_size,
             'analysis_top_keywords': settings.analysis_top_keywords,
             'media_storage_path': settings.media_storage_path,
             'stopwords_extra': settings.stopwords_extra,
@@ -657,6 +832,9 @@ async def save_runtime_config(
     url_classification_enabled: bool = Form(default=False),
     url_classification_interval_minutes: int = Form(default=30),
     url_classification_batch_size: int = Form(default=50),
+    key_lead_analysis_enabled: bool = Form(default=False),
+    key_lead_analysis_interval_minutes: int = Form(default=30),
+    key_lead_analysis_batch_size: int = Form(default=200),
 ):
     if desktop_import_mode != 'create_new':
         return redirect_with_message('/settings', _t(request, 'settings.invalid_import_mode'), 'error')
@@ -668,6 +846,8 @@ async def save_runtime_config(
     ai_summary_running_timeout_minutes = min(max(ai_summary_running_timeout_minutes, 5), 1440)
     url_classification_interval_minutes = min(max(url_classification_interval_minutes, 1), 1440)
     url_classification_batch_size = min(max(url_classification_batch_size, 1), 200)
+    key_lead_analysis_interval_minutes = min(max(key_lead_analysis_interval_minutes, 1), 1440)
+    key_lead_analysis_batch_size = min(max(key_lead_analysis_batch_size, 1), 500)
 
     _apply_settings({
         'telegram_desktop_import_mode': desktop_import_mode,
@@ -683,6 +863,9 @@ async def save_runtime_config(
         'url_classification_enabled': url_classification_enabled,
         'url_classification_interval_minutes': url_classification_interval_minutes,
         'url_classification_batch_size': url_classification_batch_size,
+        'key_lead_analysis_enabled': key_lead_analysis_enabled,
+        'key_lead_analysis_interval_minutes': key_lead_analysis_interval_minutes,
+        'key_lead_analysis_batch_size': key_lead_analysis_batch_size,
     })
     _update_env_file({
         'TELEGRAM_DESKTOP_IMPORT_MODE': desktop_import_mode,
@@ -698,6 +881,9 @@ async def save_runtime_config(
         'URL_CLASSIFICATION_ENABLED': _env_bool(url_classification_enabled),
         'URL_CLASSIFICATION_INTERVAL_MINUTES': str(url_classification_interval_minutes),
         'URL_CLASSIFICATION_BATCH_SIZE': str(url_classification_batch_size),
+        'KEY_LEAD_ANALYSIS_ENABLED': _env_bool(key_lead_analysis_enabled),
+        'KEY_LEAD_ANALYSIS_INTERVAL_MINUTES': str(key_lead_analysis_interval_minutes),
+        'KEY_LEAD_ANALYSIS_BATCH_SIZE': str(key_lead_analysis_batch_size),
     })
     await collector.apply_runtime_config()
     return redirect_with_message('/settings', _t(request, 'settings.collection_saved'), 'success')
@@ -736,14 +922,15 @@ def save_app_config(
 
 
 @app.get('/summaries', response_class=HTMLResponse)
-def summaries_page(request: Request, chat_id: int | None = None, page: int = 1):
+def summaries_page(request: Request, chat_id: str | None = None, page: int = 1):
     page_size = 20
     page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         chats = db.execute(select(MonitoredChat).order_by(MonitoredChat.title.asc())).scalars().all()
         query = select(AiSummary)
-        if chat_id:
-            query = query.where(AiSummary.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(AiSummary.chat_id == selected_chat_id)
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         total_count = db.execute(count_query).scalar_one()
         summaries = db.execute(
@@ -758,7 +945,7 @@ def summaries_page(request: Request, chat_id: int | None = None, page: int = 1):
             'request': request,
             'summaries': summaries,
             'chats': chats,
-            'selected_chat_id': chat_id,
+            'selected_chat_id': selected_chat_id,
             'chat_map': chat_map,
             'page': page,
             'page_size': page_size,
@@ -780,20 +967,21 @@ CATEGORY_ORDER = ['relay', 'seller', 'other']
 def urls_page(
     request: Request,
     category: str | None = None,
-    ai_category_id: int | None = None,
+    ai_category_id: str | None = None,
     classification_status: str | None = None,
     keyword: str | None = None,
     page: int = 1,
 ):
     page_size = 50
     page = max(page, 1)
+    selected_ai_category_id = _parse_optional_int(ai_category_id)
     valid_statuses = {'pending', 'running', 'classified', 'failed'}
     with session_scope() as db:
         query = select(AiUrl).order_by(AiUrl.last_seen_at.desc())
         if category in CATEGORY_KEYS:
             query = query.where(AiUrl.category == category)
-        if ai_category_id:
-            query = query.where(AiUrl.primary_category_id == ai_category_id)
+        if selected_ai_category_id:
+            query = query.where(AiUrl.primary_category_id == selected_ai_category_id)
         if classification_status in valid_statuses:
             query = query.where(AiUrl.classification_status == classification_status)
         if keyword and keyword.strip():
@@ -844,7 +1032,7 @@ def urls_page(
             'request': request,
             'urls': urls,
             'selected_category': category,
-            'selected_ai_category_id': ai_category_id,
+            'selected_ai_category_id': selected_ai_category_id,
             'selected_classification_status': classification_status,
             'keyword': keyword or '',
             'counts': counts,
@@ -873,14 +1061,15 @@ def urls_page(
 
 
 @app.post('/urls/classify-now')
-async def classify_urls_now(request: Request, batch_size: int = Form(default=50), include_classified: bool = Form(default=False)):
+async def classify_urls_now(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    batch_size: int = Form(default=50),
+    include_classified: bool = Form(default=False),
+):
     batch_size = min(max(batch_size, 1), 200)
-    result = await run_url_classification_once(batch_size=batch_size, include_classified=include_classified)
-    if result.get('status') == 'success':
-        return redirect_with_message('/urls', f"URL 分类完成，处理 {result.get('processed', 0)} 条", 'success')
-    if result.get('status') == 'skipped':
-        return redirect_with_message('/urls', f"URL 分类跳过：{result.get('reason', '')}", 'info')
-    return redirect_with_message('/urls', f"URL 分类失败：{result.get('reason', '')}", 'error')
+    background_tasks.add_task(_run_url_classification_background, batch_size, include_classified)
+    return redirect_with_message('/urls', f'URL 分类任务已提交，后台将处理最多 {batch_size} 条', 'info')
 
 
 @app.get('/chats/{chat_id}', response_class=HTMLResponse)
@@ -951,19 +1140,13 @@ async def manual_sync_chat(request: Request, chat_id: int):
 
 
 @app.post('/chats/{chat_id}/summarize')
-async def trigger_chat_summary(request: Request, chat_id: int):
+async def trigger_chat_summary(request: Request, background_tasks: BackgroundTasks, chat_id: int):
     with session_scope() as db:
         chat = db.get(MonitoredChat, chat_id)
     if not chat:
         return redirect_with_message('/chats', _t(request, 'chat_detail.flash_chat_not_found'), 'error')
-    try:
-        summary_id = await run_summary_now(chat_id)
-        return redirect_with_message(f'/chats/{chat_id}', _t(request, 'chat_detail.flash_ai_done', id=summary_id), 'success')
-    except RuntimeError as exc:
-        return redirect_with_message(f'/chats/{chat_id}', str(exc), 'error')
-    except Exception as exc:
-        logger.exception('manual summarize failed for chat %s', chat_id)
-        return redirect_with_message(f'/chats/{chat_id}', _t(request, 'chat_detail.flash_ai_failed', error=exc), 'error')
+    background_tasks.add_task(_run_summary_now_background, chat_id, 'chat_detail')
+    return redirect_with_message(f'/chats/{chat_id}', 'AI 总结任务已提交，后台处理中', 'info')
 
 
 @app.post('/summaries/{summary_id}/delete')
@@ -976,20 +1159,14 @@ def delete_summary(request: Request, summary_id: int):
 
 
 @app.post('/summaries/{summary_id}/rerun')
-async def rerun_summary(request: Request, summary_id: int):
+async def rerun_summary(request: Request, background_tasks: BackgroundTasks, summary_id: int):
     with session_scope() as db:
         summary = db.get(AiSummary, summary_id)
         if not summary:
             return redirect_with_message('/summaries', _t(request, 'summaries.flash_not_found'), 'error')
         chat_id = summary.chat_id
-    try:
-        new_id = await run_summary_now(chat_id)
-        return redirect_with_message('/summaries', _t(request, 'summaries.flash_rerun_done', id=new_id), 'success')
-    except RuntimeError as exc:
-        return redirect_with_message('/summaries', str(exc), 'error')
-    except Exception as exc:
-        logger.exception('rerun summary failed')
-        return redirect_with_message('/summaries', _t(request, 'summaries.flash_rerun_failed', error=exc), 'error')
+    background_tasks.add_task(_run_summary_now_background, chat_id, 'summaries_rerun')
+    return redirect_with_message('/summaries', 'AI 总结重跑任务已提交，后台处理中', 'info')
 
 
 @app.get('/status', response_class=HTMLResponse)
@@ -1021,15 +1198,16 @@ PRODUCT_STATUS_ORDER = ['available', 'sold', 'reserved']
 
 
 @app.get('/products', response_class=HTMLResponse)
-def products_page(request: Request, status: str | None = None, chat_id: int | None = None, page: int = 1):
+def products_page(request: Request, status: str | None = None, chat_id: str | None = None, page: int = 1):
     page_size = 50
     page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         query = select(AiProduct).order_by(AiProduct.last_seen_at.desc())
         if status in PRODUCT_STATUS_KEYS:
             query = query.where(AiProduct.status == status)
-        if chat_id:
-            query = query.where(AiProduct.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(AiProduct.chat_id == selected_chat_id)
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         total_count = db.execute(count_query).scalar_one()
         products = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
@@ -1047,7 +1225,7 @@ def products_page(request: Request, status: str | None = None, chat_id: int | No
             'request': request,
             'products': products,
             'selected_status': status,
-            'selected_chat_id': chat_id,
+            'selected_chat_id': selected_chat_id,
             'counts': counts,
             'labels': {k: _t(request, v) for k, v in PRODUCT_STATUS_KEYS.items()},
             'order': PRODUCT_STATUS_ORDER,
@@ -1076,7 +1254,7 @@ CONTACT_TYPE_ORDER = ['tg_user', 'tg_group', 'email', 'phone', 'other']
 @app.get('/api/urls')
 def api_urls(
     category: str | None = None,
-    ai_category_id: int | None = None,
+    ai_category_id: str | None = None,
     ai_category_slug: str | None = None,
     classification_status: str | None = None,
     keyword: str | None = None,
@@ -1084,9 +1262,10 @@ def api_urls(
     page_size: int = 50,
 ):
     page, page_size = _normalize_pagination(page, page_size)
+    parsed_ai_category_id = _parse_optional_int(ai_category_id)
     valid_statuses = {'pending', 'running', 'classified', 'failed'}
     with session_scope() as db:
-        resolved_ai_category_id = ai_category_id
+        resolved_ai_category_id = parsed_ai_category_id
         if ai_category_slug and not resolved_ai_category_id:
             category_row = db.execute(
                 select(AiUrlCategory).where(AiUrlCategory.slug == ai_category_slug)
@@ -1146,7 +1325,7 @@ def api_urls(
 
 @app.get('/api/messages')
 def api_messages(
-    chat_id: int | None = None,
+    chat_id: str | None = None,
     keyword: str | None = None,
     media_only: bool = False,
     sender: str | None = None,
@@ -1154,10 +1333,11 @@ def api_messages(
     page_size: int = 50,
 ):
     page, page_size = _normalize_pagination(page, page_size)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         query = select(Message).order_by(Message.message_date.desc())
-        if chat_id:
-            query = query.where(Message.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(Message.chat_id == selected_chat_id)
         if keyword and keyword.strip():
             query = query.where(Message.normalized_text.like(f'%{keyword.strip()}%'))
         if media_only:
@@ -1204,18 +1384,19 @@ def api_messages(
 @app.get('/api/products')
 def api_products(
     status: str | None = None,
-    chat_id: int | None = None,
+    chat_id: str | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 50,
 ):
     page, page_size = _normalize_pagination(page, page_size)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         query = select(AiProduct).order_by(AiProduct.last_seen_at.desc())
         if status in PRODUCT_STATUS_KEYS:
             query = query.where(AiProduct.status == status)
-        if chat_id:
-            query = query.where(AiProduct.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(AiProduct.chat_id == selected_chat_id)
         if keyword and keyword.strip():
             like = f'%{keyword.strip()}%'
             query = query.where((AiProduct.product_name.like(like)) | (AiProduct.seller_contact.like(like)))
@@ -1246,18 +1427,19 @@ def api_products(
 @app.get('/api/contacts')
 def api_contacts(
     contact_type: str | None = None,
-    chat_id: int | None = None,
+    chat_id: str | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 50,
 ):
     page, page_size = _normalize_pagination(page, page_size)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         query = select(AiContact).order_by(AiContact.last_seen_at.desc())
         if contact_type in CONTACT_TYPE_KEYS:
             query = query.where(AiContact.contact_type == contact_type)
-        if chat_id:
-            query = query.where(AiContact.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(AiContact.chat_id == selected_chat_id)
         if keyword and keyword.strip():
             like = f'%{keyword.strip()}%'
             query = query.where((AiContact.contact_value.like(like)) | (AiContact.context.like(like)))
@@ -1284,15 +1466,16 @@ def api_contacts(
 
 
 @app.get('/contacts', response_class=HTMLResponse)
-def contacts_page(request: Request, contact_type: str | None = None, chat_id: int | None = None, page: int = 1):
+def contacts_page(request: Request, contact_type: str | None = None, chat_id: str | None = None, page: int = 1):
     page_size = 50
     page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
     with session_scope() as db:
         query = select(AiContact).order_by(AiContact.last_seen_at.desc())
         if contact_type in CONTACT_TYPE_KEYS:
             query = query.where(AiContact.contact_type == contact_type)
-        if chat_id:
-            query = query.where(AiContact.chat_id == chat_id)
+        if selected_chat_id:
+            query = query.where(AiContact.chat_id == selected_chat_id)
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         total_count = db.execute(count_query).scalar_one()
         contacts = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
@@ -1310,7 +1493,7 @@ def contacts_page(request: Request, contact_type: str | None = None, chat_id: in
             'request': request,
             'contacts': contacts,
             'selected_type': contact_type,
-            'selected_chat_id': chat_id,
+            'selected_chat_id': selected_chat_id,
             'counts': counts,
             'labels': {k: _t(request, v) for k, v in CONTACT_TYPE_KEYS.items()},
             'order': CONTACT_TYPE_ORDER,
@@ -1325,6 +1508,99 @@ def contacts_page(request: Request, contact_type: str | None = None, chat_id: in
             'level': request.query_params.get('level', 'info'),
         },
     )
+
+
+@app.get('/key-leads', response_class=HTMLResponse)
+def key_leads_page(
+    request: Request,
+    keyword: str | None = None,
+    provider: str | None = None,
+    lead_type: str | None = None,
+    chat_id: str | None = None,
+    page: int = 1,
+):
+    page_size = 50
+    page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
+    valid_types = {'api_key', 'free_credit_account'}
+    with session_scope() as db:
+        query = select(AiKeyLead).order_by(AiKeyLead.last_seen_at.desc())
+        if provider and provider.strip():
+            query = query.where(AiKeyLead.provider == provider.strip())
+        if lead_type in valid_types:
+            query = query.where(AiKeyLead.lead_type == lead_type)
+        if selected_chat_id:
+            query = query.where(AiKeyLead.chat_id == selected_chat_id)
+        if keyword and keyword.strip():
+            like = f'%{keyword.strip()}%'
+            query = query.where(
+                (AiKeyLead.product_name.like(like)) |
+                (AiKeyLead.offer_text.like(like)) |
+                (AiKeyLead.seller_contact.like(like)) |
+                (AiKeyLead.source_text.like(like)) |
+                (AiKeyLead.reason.like(like))
+            )
+
+        total_count = _query_total(db, query)
+        leads = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        provider_counts = {
+            key or 'other': count for key, count in db.execute(
+                select(AiKeyLead.provider, func.count(AiKeyLead.id)).group_by(AiKeyLead.provider)
+            ).all()
+        }
+        type_counts = {
+            key: count for key, count in db.execute(
+                select(AiKeyLead.lead_type, func.count(AiKeyLead.id)).group_by(AiKeyLead.lead_type)
+            ).all()
+        }
+        recent_runs = db.execute(select(AiKeyLeadRun).order_by(AiKeyLeadRun.id.desc()).limit(5)).scalars().all()
+        chats = db.execute(select(MonitoredChat).where(MonitoredChat.is_active.is_(True)).order_by(MonitoredChat.title.asc())).scalars().all()
+        chat_ids = {lead.chat_id for lead in leads}
+        sender_ids = {lead.sender_user_id for lead in leads if lead.sender_user_id}
+        chat_map = {
+            chat.id: chat for chat in db.execute(select(MonitoredChat).where(MonitoredChat.id.in_(chat_ids))).scalars().all()
+        } if chat_ids else {}
+        sender_map = {
+            sender.id: sender for sender in db.execute(select(TelegramUser).where(TelegramUser.id.in_(sender_ids))).scalars().all()
+        } if sender_ids else {}
+    total_pages = max((total_count + page_size - 1) // page_size, 1)
+    return templates.TemplateResponse(
+        request=request,
+        name='key_leads.html',
+        context={
+            'request': request,
+            'leads': leads,
+            'provider_counts': provider_counts,
+            'type_counts': type_counts,
+            'recent_runs': recent_runs,
+            'chats': chats,
+            'chat_map': chat_map,
+            'sender_map': sender_map,
+            'keyword': keyword or '',
+            'selected_provider': provider or '',
+            'selected_type': lead_type or '',
+            'selected_chat_id': selected_chat_id,
+            'page': page,
+            'page_size': page_size,
+            'total_count': total_count,
+            'total_pages': total_pages,
+            'has_prev': page > 1,
+            'has_next': page < total_pages,
+            'msg': request.query_params.get('msg', ''),
+            'level': request.query_params.get('level', 'info'),
+        },
+    )
+
+
+@app.post('/key-leads/analyze-now')
+async def analyze_key_leads_now(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    batch_size: int = Form(default=200),
+):
+    batch_size = min(max(batch_size, 1), 500)
+    background_tasks.add_task(_run_key_lead_analysis_background, batch_size)
+    return redirect_with_message('/key-leads', f'Key 商线索分析任务已提交，后台将扫描最多 {batch_size} 条消息', 'info')
 
 
 # ==================== Alerts Page ====================

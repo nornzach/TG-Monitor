@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Key 商线索 - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>Key 商线索</h2>
+    <div class="page-desc">只筛选原厂 API key 和 free credits 额度号，排除中转站、Codex 和 Claude Code 账号</div>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 7h.01"/><path d="M10.5 21 3 13.5 11.5 5H20v8.5L11.5 22z"/></svg>
+    </div>
+    <div class="label">线索总数</div>
+    <div class="value">{{ total_count }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="m17 5-5-3-5 3"/><path d="m17 19-5 3-5-3"/></svg>
+    </div>
+    <div class="label">API Key</div>
+    <div class="value">{{ type_counts.get('api_key', 0) }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+    </div>
+    <div class="label">Free Credits 号</div>
+    <div class="value">{{ type_counts.get('free_credit_account', 0) }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon purple">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+    </div>
+    <div class="label">最近批次</div>
+    <div class="value">{{ recent_runs[0].id if recent_runs else '-' }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
+    <form action="/key-leads/analyze-now" method="post" data-loading-form style="display: flex; align-items: center; gap: 10px;">
+      <input type="number" name="batch_size" min="1" max="500" value="200" style="width: 110px;">
+      <button class="btn" type="submit" data-loading-text="提交中...">立即分析一批</button>
+    </form>
+    <div style="font-size: 13px; color: var(--text-secondary);">定时任务会持续按消息 ID 增量扫描</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" action="/key-leads" class="form-vertical">
+    <div style="display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(150px, 1fr)); gap: 12px;">
+      <div class="form-group">
+        <label>模糊搜索</label>
+        <input type="text" name="keyword" value="{{ keyword }}" placeholder="商品、卖家、原文、理由">
+      </div>
+      <div class="form-group">
+        <label>类型</label>
+        <select name="lead_type">
+          <option value="">全部</option>
+          <option value="api_key" {% if selected_type == 'api_key' %}selected{% endif %}>API Key</option>
+          <option value="free_credit_account" {% if selected_type == 'free_credit_account' %}selected{% endif %}>Free Credits 号</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>原厂平台</label>
+        <select name="provider">
+          <option value="">全部</option>
+          {% for provider, count in provider_counts.items()|sort %}
+          <option value="{{ provider }}" {% if selected_provider == provider %}selected{% endif %}>{{ provider }} ({{ count }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>群组</label>
+        <select name="chat_id">
+          <option value="">全部</option>
+          {% for chat in chats %}
+          <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 12px;">
+      <button type="submit">{{ t('common.filter') }}</button>
+      <a class="btn btn-secondary" href="/key-leads">{{ t('common.reset') }}</a>
+    </div>
+  </form>
+</div>
+
+{% if recent_runs %}
+<div class="panel">
+  <h3 style="padding: 16px 16px 0;">最近分析批次</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>状态</th>
+        <th>消息</th>
+        <th>线索</th>
+        <th>范围</th>
+        <th>时间</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in recent_runs %}
+      <tr>
+        <td>#{{ run.id }}</td>
+        <td><span class="badge">{{ run.status }}</span></td>
+        <td>{{ run.total_messages }}</td>
+        <td>{{ run.processed_leads }}</td>
+        <td>{{ run.start_message_id }} - {{ run.end_message_id }}</td>
+        <td>{{ run.started_at | to_beijing }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 16px 0;">
+    <h3>线索列表</h3>
+    <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
+  </div>
+  {% if leads %}
+  <table>
+    <thead>
+      <tr>
+        <th>线索</th>
+        <th>类型</th>
+        <th>平台</th>
+        <th>价格</th>
+        <th>卖家</th>
+        <th>群组</th>
+        <th>置信度</th>
+        <th>最近发现</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lead in leads %}
+      {% set chat = chat_map.get(lead.chat_id) %}
+      {% set sender = sender_map.get(lead.sender_user_id) if lead.sender_user_id else none %}
+      <tr>
+        <td style="max-width: 420px;">
+          <div style="font-weight: 600;">{{ lead.product_name or lead.offer_text or '-' }}</div>
+          {% if lead.offer_text %}<div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">{{ lead.offer_text }}</div>{% endif %}
+          {% if lead.reason %}<div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">{{ lead.reason }}</div>{% endif %}
+        </td>
+        <td><span class="badge {% if lead.lead_type == 'api_key' %}badge-green{% else %}badge-amber{% endif %}">{{ 'API Key' if lead.lead_type == 'api_key' else 'Free Credits' }}</span></td>
+        <td><code>{{ lead.provider or 'other' }}</code></td>
+        <td>{% if lead.price_amount is not none %}{{ lead.price_amount }} {{ lead.price_currency or 'CNY' }}{% else %}-{% endif %}</td>
+        <td>
+          {% if lead.seller_username %}
+          <a href="https://t.me/{{ lead.seller_username }}" target="_blank" rel="noopener">@{{ lead.seller_username }}</a>
+          {% elif lead.seller_telegram_id %}
+          <a href="tg://user?id={{ lead.seller_telegram_id }}">TG ID {{ lead.seller_telegram_id }}</a>
+          {% elif lead.seller_contact %}
+          {{ lead.seller_contact }}
+          {% elif sender and sender.username %}
+          <a href="https://t.me/{{ sender.username }}" target="_blank" rel="noopener">@{{ sender.username }}</a>
+          {% elif sender %}
+          <a href="tg://user?id={{ sender.telegram_id }}">TG ID {{ sender.telegram_id }}</a>
+          {% else %}
+          -
+          {% endif %}
+          {% if lead.seller_display_name %}
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">{{ lead.seller_display_name }}</div>
+          {% endif %}
+        </td>
+        <td>{{ chat.title if chat else lead.chat_id }}</td>
+        <td>{{ '%.0f'|format((lead.confidence or 0) * 100) }}%</td>
+        <td>{{ lead.last_seen_at | to_beijing }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-title">暂无 Key 商线索</div>
+    <div class="empty-desc">定时分析或点击“立即分析一批”后会显示原厂 API key/free credits 相关供给线索</div>
+  </div>
+  {% endif %}
+</div>
+
+{% if total_pages > 1 %}
+<div class="pagination" style="margin-top: 16px;">
+  {% if has_prev %}<a href="/key-leads?page={{ page - 1 }}&keyword={{ keyword }}&lead_type={{ selected_type }}&provider={{ selected_provider }}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+  {% if has_next %}<a href="/key-leads?page={{ page + 1 }}&keyword={{ keyword }}&lead_type={{ selected_type }}&provider={{ selected_provider }}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

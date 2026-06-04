@@ -16,8 +16,8 @@
         {{ t('chat_detail.manual_sync') }}
       </button>
     </form>
-    <form action="/chats/{{ chat.id }}/summarize" method="post" style="display: inline;">
-      <button class="btn btn-secondary" type="submit">
+    <form action="/chats/{{ chat.id }}/summarize" method="post" data-loading-form style="display: inline;">
+      <button class="btn btn-secondary" type="submit" data-loading-text="提交中...">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
         {{ t('chat_detail.trigger_ai') }}
       </button>

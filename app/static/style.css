@@ -352,6 +352,21 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .btn-danger:hover { background: #fee2e2; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn[disabled], button[disabled] {
+  opacity: 0.72;
+  cursor: wait;
+}
+.button-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: buttonSpin 0.8s linear infinite;
+}
+@keyframes buttonSpin {
+  to { transform: rotate(360deg); }
+}
 
 /* Forms */
 input[type="text"], input[type="password"], input[type="number"], input[type="email"], input[type="url"], select, textarea {

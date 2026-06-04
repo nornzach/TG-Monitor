@@ -245,6 +245,58 @@ class AiContact(Base):
     summary: Mapped['AiSummary | None'] = relationship('AiSummary', foreign_keys=[summary_id])
 
 
+class AiKeyLeadRun(Base):
+    __tablename__ = 'ai_key_lead_runs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(30), default='running', index=True)
+    batch_size: Mapped[int] = mapped_column(Integer, default=200)
+    total_messages: Mapped[int] = mapped_column(Integer, default=0)
+    processed_leads: Mapped[int] = mapped_column(Integer, default=0)
+    start_message_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    end_message_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AiKeyLead(Base):
+    __tablename__ = 'ai_key_leads'
+    __table_args__ = (
+        UniqueConstraint('content_hash', name='uq_key_lead_content_hash'),
+        Index('idx_key_lead_provider_type', 'provider', 'lead_type'),
+        Index('idx_key_lead_chat_seen', 'chat_id', 'last_seen_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey('ai_key_lead_runs.id'), nullable=True, index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey('messages.id'), index=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey('monitored_chats.id'), index=True)
+    sender_user_id: Mapped[int | None] = mapped_column(ForeignKey('telegram_users.id'), nullable=True, index=True)
+    lead_type: Mapped[str] = mapped_column(String(30), index=True)
+    provider: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    product_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    offer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price_amount: Mapped[float | None] = mapped_column(nullable=True)
+    price_currency: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    seller_contact: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    seller_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    seller_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    seller_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    run: Mapped['AiKeyLeadRun | None'] = relationship('AiKeyLeadRun', foreign_keys=[run_id])
+    message: Mapped['Message'] = relationship('Message', foreign_keys=[message_id])
+    chat: Mapped['MonitoredChat'] = relationship('MonitoredChat', foreign_keys=[chat_id])
+    sender: Mapped['TelegramUser | None'] = relationship('TelegramUser', foreign_keys=[sender_user_id])
+
+
 class AlertRule(Base):
     __tablename__ = 'alert_rules'
 

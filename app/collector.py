@@ -13,7 +13,7 @@ from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import User, Channel, Chat
 from sqlalchemy import select, func
 
-from .ai_service import extract_urls_from_text, run_summary_for_chat, run_url_classification_once, upsert_discovered_urls
+from .ai_service import extract_urls_from_text, run_key_lead_analysis_once, run_summary_for_chat, run_url_classification_once, upsert_discovered_urls
 from .alerts import check_message_alerts
 from .db import session_scope
 from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary
@@ -63,6 +63,17 @@ class TelegramCollector:
                 'interval',
                 minutes=settings.url_classification_interval_minutes,
                 id='url_classification',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+
+        if settings.key_lead_analysis_enabled:
+            self.scheduler.add_job(
+                run_key_lead_analysis_once,
+                'interval',
+                minutes=settings.key_lead_analysis_interval_minutes,
+                id='key_lead_analysis',
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
@@ -191,6 +202,23 @@ class TelegramCollector:
             if self.scheduler.running:
                 try:
                     self.scheduler.remove_job('url_classification')
+                except Exception:
+                    pass
+
+        if settings.key_lead_analysis_enabled:
+            self.scheduler.add_job(
+                run_key_lead_analysis_once,
+                'interval',
+                minutes=settings.key_lead_analysis_interval_minutes,
+                id='key_lead_analysis',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+        else:
+            if self.scheduler.running:
+                try:
+                    self.scheduler.remove_job('key_lead_analysis')
                 except Exception:
                     pass
 

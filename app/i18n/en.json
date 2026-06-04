@@ -86,6 +86,7 @@
     "urls": "URL Classification",
     "products": "Products",
     "contacts": "Contacts",
+    "key_leads": "API Key Leads",
     "alerts": "Alerts",
     "alert_system": "Alert System",
     "system": "System",
@@ -465,5 +466,14 @@
     "connect_failed": "Connection failed: {{error}}",
     "desktop_import_disabled": "Desktop session import is disabled, use manual login",
     "invalid_import_mode": "Invalid desktop session import mode"
+  },
+  "login": {
+    "title": "Login",
+    "subtitle": "TG Monitor Platform",
+    "password_label": "Access Password",
+    "submit": "Login",
+    "error_invalid": "Incorrect password, please try again",
+    "logout_success": "Logged out successfully",
+    "placeholder_password": "Enter access password"
   }
 }

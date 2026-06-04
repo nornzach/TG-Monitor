@@ -21,6 +21,8 @@ from .models import (
     AiUrlClassification,
     AiProduct,
     AiContact,
+    AiKeyLead,
+    AiKeyLeadRun,
 )
 from .config import settings
 
@@ -28,6 +30,24 @@ logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+")
 URL_TRAILING_PUNCTUATION = '.,;，。；）)]}>'
+KEY_LEAD_POSITIVE_PATTERN = re.compile(
+    r'(api\s*key|apikey|api-key|\bkey\b|sk-[A-Za-z0-9]|AIza|free\s*credits?|credits?|'
+    r'api\s*额度|api\s*余额|免费额度|试用额度|新号额度|绑卡额度|额度号|带额度|'
+    r'key商|官站\s*api|官方\s*api|原厂\s*api|openai\s*api|claude\s*api|anthropic\s*api|'
+    r'gemini\s*api|google\s*api|grok\s*api|xai\s*api|groq\s*api|openrouter\s*api)',
+    re.IGNORECASE,
+)
+KEY_LEAD_NEGATIVE_PATTERN = re.compile(
+    r'(codex|claude\s*code|cursor|windsurf|copilot|chatgpt\s*(plus|pro|team)|claude\s*(pro|max|team)|'
+    r'gemini\s*(pro|ultra|advanced)|grok\s*(pro|plus)|会员|成品号|会员号|共享号|独享号|'
+    r'资格链接|kyc|卡密|直充|充值|订阅|月卡|年卡|plus|pro|team|max)',
+    re.IGNORECASE,
+)
+KEY_LEAD_STRONG_PATTERN = re.compile(
+    r'(api\s*key|apikey|api-key|sk-[A-Za-z0-9]|AIza|官站\s*api|官方\s*api|原厂\s*api|'
+    r'api\s*额度|api\s*余额|api\s*free\s*credits?|free\s*credits?|credits?)',
+    re.IGNORECASE,
+)
 
 SYSTEM_PROMPT = """你是一个 Telegram 频道/群聊监控分析助手。你的任务是分析一段聊天记录，输出结构化 JSON。
 
@@ -126,6 +146,54 @@ DEFAULT_URL_CLASSIFICATION_PROMPT = """请根据 URL 的域名、路径和原始
 - AI 工具、模型 API、提示词、自动化服务 => ai_tool
 - 文档、教程、博客文章 => documentation
 - 不确定但仍是普通网页 => generic_link"""
+
+KEY_LEAD_SYSTEM_PROMPT = """你是一个 Telegram 聊天记录商机筛选助手。你的任务是从聊天记录中只找出“原厂官方 API key / 原厂官方 API free credits 额度号”供给线索。
+
+## 必须保留的目标
+- OpenAI、Anthropic/Claude、Google/Gemini、xAI/Grok、Groq、OpenRouter 等原厂或官方平台的 API key 出售、出租、收购、批发、开车、回收线索。
+- 明确提到 API free credits、API 免费额度、API 试用额度、新号 API 额度、绑卡 API 额度、API 余额、credits 号、带 API 额度账号的原厂账号线索。
+- 可以包含卖家联系方式、价格、平台、额度、库存、批量供货等信息。
+
+## 必须排除
+- 中转站、代理站、转发站、节点、relay、站点余额、第三方聚合 API、非原厂 API 服务。
+- Codex 账号、Claude Code 账号、Cursor、Windsurf、Devin、Copilot 等代码工具账号或订阅号。
+- ChatGPT Plus/Team/Pro 普通账号、Claude Pro/Max 普通账号、Gemini Pro/Ultra/Advanced/Grok 会员账号、成品号、会员号、共享号、独享号、KYC认证、资格链接、卡密、直充、充值、月卡、年卡。
+- 只有“Pro/Plus/会员/成品号/资格链接/KYC/卡密/直充/充值”等词，没有明确出现 API key/key/free credits/API 额度/官站 API 的，一律不要输出。
+- 普通 TG 账号、手机号、接码、实名号、店铺链接、网盘链接、教程链接。
+- 不要推测“可能是原厂账号”或“可能涉及 API”；必须原文明确说明 API key 或 API credits。
+
+## 输出 JSON Schema
+只返回 JSON 对象，不要 markdown，不要解释：
+{
+  "items": [
+    {
+      "message_id": 123,
+      "lead_type": "api_key",
+      "provider": "openai",
+      "product_name": "OpenAI API key",
+      "offer_text": "string, 对供给内容的简短中文摘要",
+      "price": 100,
+      "currency": "CNY",
+      "confidence": 0.95,
+      "reason": "明确出售 OpenAI 原厂 API key"
+    }
+  ]
+}
+
+## 字段规则
+- lead_type 只能是 api_key 或 free_credit_account。
+- provider 用小写英文，例如 openai、anthropic、google、xai、groq、openrouter、other。
+- 不确定是原厂官方 API key/API free credits 的，不要输出。
+- 每条命中的消息最多输出 1 条，优先输出最明确的供给线索。
+- price 无法识别返回 null；currency 默认 CNY。
+- confidence 是 0 到 1 的小数。
+
+## 负例，必须返回空 items
+- “Gemini Pro 一年成品号”
+- “Gemini Pro 一年资格链接 + Claude KYC认证”
+- “Super Grok 2个月卡密直充”
+- “GPT Plus / Claude Pro / Gemini Pro 会员账号”
+- “中转 API / relay API / 站点余额”"""
 
 PROVIDER_CONFIGS = {
     'deepseek': {
@@ -531,6 +599,106 @@ def _validate_url_classification_result(result: dict, url_ids: set[int]) -> list
     return items
 
 
+def _build_key_lead_prompt(messages: list[Message]) -> str:
+    lines = []
+    for message in messages:
+        payload = {
+            'message_id': message.id,
+            'chat_id': message.chat_id,
+            'sender_user_id': message.sender_user_id,
+            'time': _iso_for_prompt(message.message_date),
+            'text': (message.raw_text or '')[:2000],
+        }
+        lines.append(json.dumps(payload, ensure_ascii=False))
+    return '请逐条筛选下面的聊天消息，每行一个 JSON：\n' + '\n'.join(lines)
+
+
+def _iso_for_prompt(value: datetime | None) -> str | None:
+    return value.isoformat(sep=' ') if value else None
+
+
+def _normalize_key_provider(value: str | None) -> str:
+    provider = re.sub(r'[^a-z0-9_]+', '_', (value or '').strip().lower()).strip('_')
+    return provider[:60] or 'other'
+
+
+def _is_key_lead_candidate(text: str | None) -> bool:
+    if not text:
+        return False
+    if not KEY_LEAD_POSITIVE_PATTERN.search(text):
+        return False
+    if KEY_LEAD_NEGATIVE_PATTERN.search(text) and not KEY_LEAD_STRONG_PATTERN.search(text):
+        return False
+    return True
+
+
+def _is_valid_key_lead_item(text: str | None, item: dict) -> bool:
+    if not _is_key_lead_candidate(text):
+        return False
+    combined = ' '.join([
+        text or '',
+        str(item.get('product_name') or ''),
+        str(item.get('offer_text') or ''),
+        str(item.get('reason') or ''),
+    ])
+    if KEY_LEAD_NEGATIVE_PATTERN.search(combined) and not KEY_LEAD_STRONG_PATTERN.search(combined):
+        return False
+    return True
+
+
+def _validate_key_lead_result(result: dict, messages: list[Message]) -> list[dict]:
+    message_by_id = {message.id: message for message in messages}
+    raw_items = result.get('items')
+    if raw_items is None:
+        raw_items = result.get('leads')
+    if not isinstance(raw_items, list):
+        return []
+
+    allowed_types = {'api_key', 'free_credit_account'}
+    items = []
+    seen_messages: set[int] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            message_id = int(raw.get('message_id'))
+        except (TypeError, ValueError):
+            continue
+        message = message_by_id.get(message_id)
+        if not message or message_id in seen_messages:
+            continue
+        if not _is_valid_key_lead_item(message.raw_text, raw):
+            continue
+        lead_type = str(raw.get('lead_type') or '').strip().lower()
+        if lead_type not in allowed_types:
+            continue
+
+        price = raw.get('price')
+        try:
+            price = float(price) if price is not None else None
+        except (TypeError, ValueError):
+            price = None
+        confidence = raw.get('confidence')
+        try:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        except (TypeError, ValueError):
+            confidence = None
+
+        seen_messages.add(message_id)
+        items.append({
+            'message_id': message_id,
+            'lead_type': lead_type,
+            'provider': _normalize_key_provider(raw.get('provider')),
+            'product_name': str(raw.get('product_name') or '').strip()[:255] or None,
+            'offer_text': str(raw.get('offer_text') or '').strip()[:1000] or None,
+            'price_amount': price,
+            'price_currency': str(raw.get('currency') or 'CNY').strip()[:20].upper(),
+            'confidence': confidence,
+            'reason': str(raw.get('reason') or '').strip()[:500] or None,
+        })
+    return items
+
+
 def _build_url_classification_prompt(urls: list[AiUrl], categories: list[AiUrlCategory], business_prompt: str) -> str:
     category_lines = [
         f'- {c.slug}: {c.name}' + (f'；{c.description}' if c.description else '')
@@ -568,6 +736,22 @@ async def classify_urls(api_key: str, provider_config: dict, urls: list[AiUrl], 
             api_key, base_url, model, URL_CLASSIFICATION_SYSTEM_PROMPT, user_prompt, supports_json
         )
     return _validate_url_classification_result(parsed, {u.id for u in urls})
+
+
+async def classify_key_leads(api_key: str, provider_config: dict, messages: list[Message]) -> list[dict]:
+    api_type = provider_config.get('api_type', 'openai_compatible')
+    base_url = provider_config.get('base_url', '')
+    model = provider_config.get('default_model', '')
+    supports_json = provider_config.get('supports_json_mode', True)
+    user_prompt = _build_key_lead_prompt(messages)
+
+    if api_type == 'anthropic':
+        parsed = await _call_anthropic_json(api_key, model, KEY_LEAD_SYSTEM_PROMPT, user_prompt)
+    else:
+        parsed = await _call_openai_compatible_json(
+            api_key, base_url, model, KEY_LEAD_SYSTEM_PROMPT, user_prompt, supports_json
+        )
+    return _validate_key_lead_result(parsed, messages)
 
 
 def _apply_url_classifications(db: Session, run: AiUrlClassificationRun, urls: list[AiUrl], items: list[dict]) -> tuple[int, int]:
@@ -732,6 +916,180 @@ async def run_url_classification_once(batch_size: int | None = None, include_cla
                 for url in db.query(AiUrl).filter(AiUrl.classification_run_id == run_id).all():
                     url.classification_status = 'failed'
                     url.classification_error = str(exc)
+                db.commit()
+        except Exception:
+            pass
+        return {'status': 'failed', 'reason': str(exc), 'processed': 0}
+    finally:
+        db.close()
+
+
+def _key_lead_hash(message_id: int, item: dict) -> str:
+    raw = '|'.join([
+        str(message_id),
+        item.get('lead_type') or '',
+        item.get('provider') or '',
+        item.get('product_name') or '',
+        item.get('seller_contact') or '',
+    ])
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _sender_snapshot(message: Message) -> dict:
+    sender = message.sender
+    if not sender:
+        return {'telegram_id': None, 'username': None, 'display_name': None, 'contact': None}
+
+    username = sender.username.strip() if sender.username else None
+    display_name = ' '.join(part for part in (sender.first_name, sender.last_name) if part) or username
+    contact = f'@{username}' if username else f'tg://user?id={sender.telegram_id}'
+    return {
+        'telegram_id': sender.telegram_id,
+        'username': username,
+        'display_name': display_name,
+        'contact': contact,
+    }
+
+
+def _apply_key_leads(db: Session, run: AiKeyLeadRun, messages: list[Message], items: list[dict]) -> int:
+    now = datetime.utcnow()
+    message_by_id = {message.id: message for message in messages}
+    processed = 0
+
+    for item in items:
+        message = message_by_id.get(item['message_id'])
+        if not message:
+            continue
+        sender = _sender_snapshot(message)
+        content_hash = _key_lead_hash(message.id, item)
+        existing = db.query(AiKeyLead).filter(AiKeyLead.content_hash == content_hash).first()
+        if existing:
+            existing.run_id = run.id
+            existing.price_amount = item['price_amount']
+            existing.price_currency = item['price_currency']
+            existing.offer_text = item['offer_text']
+            existing.seller_contact = sender['contact']
+            existing.seller_telegram_id = sender['telegram_id']
+            existing.seller_username = sender['username']
+            existing.seller_display_name = sender['display_name']
+            existing.confidence = item['confidence']
+            existing.reason = item['reason']
+            existing.source_text = (message.raw_text or '')[:2000]
+            existing.last_seen_at = now
+        else:
+            db.add(AiKeyLead(
+                run_id=run.id,
+                message_id=message.id,
+                chat_id=message.chat_id,
+                sender_user_id=message.sender_user_id,
+                lead_type=item['lead_type'],
+                provider=item['provider'],
+                product_name=item['product_name'],
+                offer_text=item['offer_text'],
+                price_amount=item['price_amount'],
+                price_currency=item['price_currency'],
+                seller_contact=sender['contact'],
+                seller_telegram_id=sender['telegram_id'],
+                seller_username=sender['username'],
+                seller_display_name=sender['display_name'],
+                confidence=item['confidence'],
+                reason=item['reason'],
+                source_text=(message.raw_text or '')[:2000],
+                content_hash=content_hash,
+                first_seen_at=now,
+                last_seen_at=now,
+            ))
+        processed += 1
+    return processed
+
+
+async def run_key_lead_analysis_once(batch_size: int | None = None) -> dict:
+    db = SessionLocal()
+    run_id: int | None = None
+    try:
+        api_key = get_ai_setting(db, 'ai_api_key')
+        if not api_key:
+            return {'status': 'skipped', 'reason': 'missing_api_key', 'processed': 0}
+
+        running = db.query(AiKeyLeadRun).filter(AiKeyLeadRun.status == 'running').first()
+        if running:
+            timeout_at = datetime.utcnow() - timedelta(minutes=settings.ai_summary_running_timeout_minutes)
+            if running.started_at and running.started_at < timeout_at:
+                running.status = 'failed'
+                running.error_message = 'Key lead analysis timed out and was released for retry'
+                running.finished_at = datetime.utcnow()
+                db.commit()
+            else:
+                return {'status': 'skipped', 'reason': 'already_running', 'processed': 0}
+
+        last = db.query(AiKeyLeadRun).filter(AiKeyLeadRun.status == 'success').order_by(AiKeyLeadRun.end_message_id.desc()).first()
+        last_message_id = last.end_message_id if last else 0
+        limit = min(max(batch_size or settings.key_lead_analysis_batch_size, 1), 500)
+        scanned_messages = db.query(Message).filter(
+            Message.id > last_message_id,
+            Message.raw_text.isnot(None),
+            Message.raw_text != '',
+        ).order_by(Message.id.asc()).limit(limit).all()
+        if not scanned_messages:
+            return {'status': 'skipped', 'reason': 'no_new_messages', 'processed': 0}
+
+        messages = [message for message in scanned_messages if _is_key_lead_candidate(message.raw_text)]
+        if not messages:
+            run = AiKeyLeadRun(
+                status='success',
+                batch_size=limit,
+                total_messages=len(scanned_messages),
+                processed_leads=0,
+                start_message_id=scanned_messages[0].id,
+                end_message_id=scanned_messages[-1].id,
+                prompt_version='key-lead-v2',
+                started_at=datetime.utcnow(),
+                finished_at=datetime.utcnow(),
+            )
+            db.add(run)
+            db.commit()
+            return {'status': 'success', 'run_id': run.id, 'messages': len(scanned_messages), 'processed': 0}
+
+        run = AiKeyLeadRun(
+            status='running',
+            batch_size=limit,
+            total_messages=len(scanned_messages),
+            start_message_id=scanned_messages[0].id,
+            end_message_id=scanned_messages[-1].id,
+            prompt_version='key-lead-v2',
+            started_at=datetime.utcnow(),
+        )
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+        provider_config = get_ai_provider_config(db)
+        db.expunge_all()
+        db.close()
+        items = await classify_key_leads(api_key, provider_config, messages)
+
+        db = SessionLocal()
+        run = db.get(AiKeyLeadRun, run_id)
+        if not run:
+            return {'status': 'failed', 'reason': 'run_missing', 'processed': 0}
+        stored_messages = db.query(Message).filter(Message.id.in_([m.id for m in messages])).all()
+        processed = _apply_key_leads(db, run, stored_messages, items)
+        run.processed_leads = processed
+        run.status = 'success'
+        run.finished_at = datetime.utcnow()
+        db.commit()
+        logger.info('Key lead analysis run=%s messages=%d leads=%d', run.id, len(messages), processed)
+        return {'status': 'success', 'run_id': run.id, 'messages': len(messages), 'processed': processed}
+    except Exception as exc:
+        logger.exception('Key lead analysis failed run=%s', run_id)
+        try:
+            db.rollback()
+            if run_id:
+                run = db.get(AiKeyLeadRun, run_id)
+                if run:
+                    run.status = 'failed'
+                    run.error_message = str(exc)
+                    run.finished_at = datetime.utcnow()
                 db.commit()
         except Exception:
             pass
