@@ -115,6 +115,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware for page-level cookie auth and API key auth."""
 
     async def dispatch(self, request: Request, call_next):
+        from urllib.parse import quote
         path = request.url.path
 
         # Static/media/lang paths — always allow
@@ -150,14 +151,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 from urllib.parse import urlparse
                 parsed = urlparse(ref)
                 next_url = parsed.path if parsed.path.startswith('/') else '/'
-            from urllib.parse import quote
             return RedirectResponse(f'/login?next={quote(next_url)}', status_code=303)
 
         # For GET requests, preserve the original URL as next
         next_url = str(request.url.path)
         if request.url.query:
             next_url += '?' + request.url.query
-        return RedirectResponse(f'/login?next={__import__("urllib.parse").quote(next_url)}', status_code=303)
+        return RedirectResponse(f'/login?next={quote(next_url)}', status_code=303)
 
 
 # ==================== i18n ====================

@@ -6,6 +6,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 
+import socks
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 
@@ -67,6 +68,11 @@ class TelegramSessionManager:
             except Exception as exc:
                 logger.warning('failed to delete session file %s: %s', p, exc)
 
+    def _proxy(self) -> tuple | None:
+        if settings.telegram_proxy_host and settings.telegram_proxy_port:
+            return (socks.SOCKS5, settings.telegram_proxy_host, settings.telegram_proxy_port)
+        return None
+
     async def connect(self, allow_desktop_import: bool = False) -> TelegramClient | None:
         async with self._lock:
             if self.client and await self._maybe_await(self.client.is_connected()):
@@ -123,7 +129,7 @@ class TelegramSessionManager:
                 logger.warning('no API credentials available for session file')
                 return None
 
-        client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False)
+        client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False, proxy=self._proxy())
         await client.connect()
         if await self._maybe_await(client.is_user_authorized()):
             logger.info('reused existing session file')
@@ -187,7 +193,7 @@ class TelegramSessionManager:
             await self._disconnect_pending_manual_login()
             api_id, api_hash = self._resolve_api_credentials()
             settings.resolved_session_path.parent.mkdir(parents=True, exist_ok=True)
-            client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False)
+            client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False, proxy=self._proxy())
             try:
                 await client.connect()
                 sent_code = await client.send_code_request(phone)

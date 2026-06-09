@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     telegram_background_collection_enabled: bool = False
     telegram_api_id: int | None = None
     telegram_api_hash: str | None = None
+    telegram_proxy_host: str = ''
+    telegram_proxy_port: int = 0
 
     analysis_top_keywords: int = 30
     sync_batch_size: int = 200

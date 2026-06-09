@@ -54,3 +54,6 @@ Desktop.ini
 
 # Claude Code
 .claude/
+
+# CodeGraph index
+.codegraph/
