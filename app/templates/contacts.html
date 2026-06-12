@@ -9,30 +9,83 @@
 </div>
 
 <div class="filter-tabs">
-  <a href="/contacts" class="filter-tab {% if not selected_type %}active{% endif %}">
+  <a href="/contacts{% if selected_chat_id or keyword %}?{% if selected_chat_id %}chat_id={{ selected_chat_id }}&{% endif %}{% if keyword %}keyword={{ keyword | urlencode }}{% endif %}{% endif %}" class="filter-tab {% if not selected_type %}active{% endif %}">
     {{ t('common.all') }} <span class="badge">{{ total_count }}</span>
   </a>
   {% for ct in order %}
-  <a href="/contacts?contact_type={{ ct }}" class="filter-tab {% if selected_type == ct %}active{% endif %}">
+  <a href="/contacts?contact_type={{ ct }}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}{% if keyword %}&keyword={{ keyword | urlencode }}{% endif %}" class="filter-tab {% if selected_type == ct %}active{% endif %}">
     {{ labels[ct] }} <span class="badge">{{ counts[ct] }}</span>
   </a>
   {% endfor %}
 </div>
 
-<div style="margin-bottom: 16px;">
-  <select onchange="if(this.value) window.location='/contacts?contact_type={{ selected_type or '' }}&chat_id='+this.value; else window.location='/contacts?contact_type={{ selected_type or '' }}';" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font-size: 13px;">
-    <option value="">{{ t('messages.chat_filter') }}</option>
-    {% for chat in chats %}
-    <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
-    {% endfor %}
-  </select>
+<div class="panel" style="padding: 16px;">
+  <form method="get" action="/contacts" class="filters">
+    <input type="hidden" name="contact_type" value="{{ selected_type or '' }}">
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('contacts.search_placeholder') }}" style="min-width: 220px;">
+    <select name="chat_id" style="min-width: 180px;">
+      <option value="">{{ t('messages.chat_filter') }}</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_type or selected_chat_id or keyword %}
+    <a class="btn btn-secondary" href="/contacts">{{ t('common.reset') }}</a>
+    {% endif %}
+  </form>
 </div>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">{{ t('contacts.filtered_total') }}</div>
+    <div class="value">{{ aggregates.total }}</div>
+  </div>
+  <div class="card">
+    <div class="label">{{ t('contacts.unique_count') }}</div>
+    <div class="value">{{ aggregates.unique_count }}</div>
+  </div>
+  <div class="card">
+    <div class="label">{{ t('contacts.multi_chat_count') }}</div>
+    <div class="value">{{ aggregates.multi_chat_count }}</div>
+  </div>
+</div>
+
+{% if aggregates.repeated %}
+<div class="panel">
+  <h3 style="margin-bottom: 12px;">{{ t('contacts.aggregate_title') }}</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t('contacts.contact_type') }}</th>
+        <th>{{ t('contacts.contact_value') }}</th>
+        <th>{{ t('common.count') }}</th>
+        <th>{{ t('contacts.chat_count') }}</th>
+        <th>{{ t('contacts.first_seen') }}</th>
+        <th>{{ t('contacts.last_seen') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in aggregates.repeated %}
+      <tr>
+        <td><span class="badge">{{ labels.get(item.contact_type, item.contact_type) }}</span></td>
+        <td>{{ item.contact_value }}</td>
+        <td>{{ item.count }}</td>
+        <td>{{ item.chat_count }}</td>
+        <td>{{ item.first_seen_at | to_beijing('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ item.last_seen_at | to_beijing('%Y-%m-%d %H:%M') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% if total_pages > 1 %}
 <div class="pagination">
-  {% if has_prev %}<a href="/contacts?page={{ page - 1 }}{% if selected_type %}&contact_type={{ selected_type }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  {% if has_prev %}<a href="{{ page_url_prefix }}{{ page - 1 }}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
   <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
-  {% if has_next %}<a href="/contacts?page={{ page + 1 }}{% if selected_type %}&contact_type={{ selected_type }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+  {% if has_next %}<a href="{{ page_url_prefix }}{{ page + 1 }}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
 </div>
 {% endif %}
 
@@ -78,9 +131,9 @@
 
 {% if total_pages > 1 %}
 <div class="pagination" style="margin-top: 16px;">
-  {% if has_prev %}<a href="/contacts?page={{ page - 1 }}{% if selected_type %}&contact_type={{ selected_type }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  {% if has_prev %}<a href="{{ page_url_prefix }}{{ page - 1 }}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
   <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
-  {% if has_next %}<a href="/contacts?page={{ page + 1 }}{% if selected_type %}&contact_type={{ selected_type }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+  {% if has_next %}<a href="{{ page_url_prefix }}{{ page + 1 }}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

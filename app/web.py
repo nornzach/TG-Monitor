@@ -6,25 +6,35 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, or_, case
 
 from . import analysis
+from . import analysis_advanced
 from .analysis import dashboard_metrics, chat_statistics, system_status
-from .ai_service import PROVIDER_CONFIGS, get_ai_provider_config, get_url_classification_prompt, run_key_lead_analysis_once, run_summary_now, run_url_classification_once
+from .ai_service import PROVIDER_CONFIGS, deduplicate_existing_urls, get_ai_provider_config, get_url_classification_prompt, normalize_url_for_dedup, run_key_lead_analysis_once, run_summary_now, run_url_classification_once, url_duplicate_stats
 from .collector import collector
 from .config import settings, BASE_DIR
 from .db import init_database, session_scope
-from .models import MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact, AiKeyLead, AiKeyLeadRun, AlertRule, AlertMatch
+from .join_targets import JOIN_STATUS_KEYS, discover_join_targets_from_collected_data, enqueue_join_targets, sync_join_targets_with_monitored_chats
+from .market_brief import generate_daily_brief
+from .models import (
+    MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary,
+    AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact,
+    AiKeyLead, AiKeyLeadRun, AlertRule, AlertMatch, TelegramJoinTarget,
+    SystemEvent, DailyMarketBrief,
+)
 from .telegram_client import telegram_session_manager
 
 # ==================== i18n ====================
@@ -87,13 +97,24 @@ def _env_bool(value: bool) -> str:
 # ==================== Authentication ====================
 
 _AUTH_SECRET = secrets.token_hex(32)
+_CSRF_COOKIE_NAME = 'csrf_token'
+_CSRF_FORM_FIELD = 'csrf_token'
+_UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+
+
+def _auth_password_configured() -> bool:
+    return bool(settings.auth_password and settings.auth_password.strip())
 
 
 def _make_auth_token() -> str:
+    if not _auth_password_configured():
+        return ''
     return hashlib.sha256(f"{settings.auth_password}:{_AUTH_SECRET}".encode()).hexdigest()
 
 
 def _check_auth_cookie(request: Request) -> bool:
+    if not _auth_password_configured():
+        return True
     token = request.cookies.get('auth_token')
     if not token:
         return False
@@ -102,10 +123,49 @@ def _check_auth_cookie(request: Request) -> bool:
 
 
 def _check_api_sk(request: Request) -> bool:
+    expected = settings.api_sk.strip() if settings.api_sk else ''
+    if not expected:
+        return False
     sk = request.headers.get('x-api-key', '')
+    sk = sk.strip()
     if not sk:
         return False
-    return secrets.compare_digest(sk.strip(), settings.api_sk)
+    return secrets.compare_digest(sk, expected)
+
+
+def _csrf_token(request: Request) -> str:
+    existing = getattr(request.state, 'csrf_token', '')
+    if existing:
+        return existing
+    token = request.cookies.get(_CSRF_COOKIE_NAME, '')
+    if len(token) < 32:
+        token = secrets.token_urlsafe(32)
+    request.state.csrf_token = token
+    return token
+
+
+def _set_csrf_cookie(response, request: Request) -> None:
+    response.set_cookie(
+        _CSRF_COOKIE_NAME,
+        _csrf_token(request),
+        max_age=86400 * 30,
+        httponly=False,
+        samesite='lax',
+        secure=request.url.scheme == 'https',
+    )
+
+
+async def _check_csrf(request: Request) -> bool:
+    cookie_token = request.cookies.get(_CSRF_COOKIE_NAME, '')
+    if not cookie_token:
+        return False
+    submitted_token = request.headers.get('x-csrf-token', '')
+    try:
+        form = await request.form()
+        submitted_token = str(form.get(_CSRF_FORM_FIELD, '')) or submitted_token
+    except Exception:
+        pass
+    return bool(submitted_token) and secrets.compare_digest(cookie_token, submitted_token)
 
 
 _PUBLIC_PATHS = {'/login', '/logout'}
@@ -115,7 +175,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware for page-level cookie auth and API key auth."""
 
     async def dispatch(self, request: Request, call_next):
-        from urllib.parse import quote
         path = request.url.path
 
         # Static/media/lang paths — always allow
@@ -124,7 +183,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Login/logout paths — always allow
         if path in _PUBLIC_PATHS:
-            return await call_next(request)
+            response = await call_next(request)
+            if request.method == 'GET' and not request.cookies.get(_CSRF_COOKIE_NAME):
+                _set_csrf_cookie(response, request)
+            return response
 
         # API routes — check X-API-Key header
         if path.startswith('/api/'):
@@ -138,7 +200,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # All other routes — check auth cookie
         # Also skip auth for the language-switch redirect (it's handled below)
         if _check_auth_cookie(request):
-            return await call_next(request)
+            if request.method in _UNSAFE_METHODS and not await _check_csrf(request):
+                return JSONResponse({'error': 'CSRF validation failed'}, status_code=403)
+            response = await call_next(request)
+            if not request.cookies.get(_CSRF_COOKIE_NAME):
+                _set_csrf_cookie(response, request)
+            return response
 
         # Not authenticated — redirect to login
         # For POST requests, try Referer header for next, fallback to /
@@ -178,14 +245,18 @@ def _update_env_file(updates: dict[str, str]) -> None:
                 continue
             key = line.split('=', 1)[0].strip()
             if key in updates:
-                lines.append(f'{key}={updates[key]}')
+                lines.append(f'{key}={_env_value(updates[key])}')
                 written.add(key)
             else:
                 lines.append(line)
         for key, value in updates.items():
             if key not in written:
-                lines.append(f'{key}={value}')
+                lines.append(f'{key}={_env_value(value)}')
         env_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
+def _env_value(value: str) -> str:
+    return str(value).replace('\r', ' ').replace('\n', ' ').strip()
 
 
 def _apply_settings(updates: dict[str, object]) -> None:
@@ -195,6 +266,22 @@ def _apply_settings(updates: dict[str, object]) -> None:
 
 def _iso_dt(value: datetime | None) -> str | None:
     return value.isoformat(sep=' ') if value else None
+
+
+def _daily_brief_payload(brief: DailyMarketBrief | None) -> dict | None:
+    if not brief:
+        return None
+    return {
+        'id': brief.id,
+        'brief_date': brief.brief_date.isoformat() if brief.brief_date else None,
+        'title': brief.title,
+        'content': brief.content,
+        'signals_json': brief.signals_json if isinstance(brief.signals_json, list) else [],
+        'hot_topics_json': brief.hot_topics_json if isinstance(brief.hot_topics_json, list) else [],
+        'risk_level': brief.risk_level,
+        'price_moves_json': brief.price_moves_json if isinstance(brief.price_moves_json, list) else [],
+        'created_at': brief.created_at.isoformat() if brief.created_at else None,
+    }
 
 
 def _normalize_pagination(page: int, page_size: int, max_page_size: int = 200) -> tuple[int, int]:
@@ -210,6 +297,56 @@ def _parse_optional_int(value: int | str | None) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+MARKET_SIGNAL_TYPE_KEYS = {
+    'market': 'market_intel.type_market',
+    'risk': 'market_intel.type_risk',
+    'price': 'market_intel.type_price',
+    'legal': 'market_intel.type_legal',
+    'hotspot': 'market_intel.type_hotspot',
+    'gossip': 'market_intel.type_gossip',
+}
+
+
+def _market_intelligence_payload(summary: AiSummary) -> dict:
+    payload = summary.extracted_urls or {}
+    intel = payload.get('market_intelligence') if isinstance(payload, dict) else {}
+    if not isinstance(intel, dict):
+        intel = {}
+    risk_level = str(intel.get('risk_level') or 'low').strip().lower()
+    if risk_level not in {'low', 'medium', 'high'}:
+        risk_level = 'low'
+    return {
+        'market_trend': str(intel.get('market_trend') or '').strip(),
+        'risk_level': risk_level,
+        'risk_signals': _json_string_list(intel.get('risk_signals')),
+        'price_changes': _json_string_list(intel.get('price_changes')),
+        'legal_risks': _json_string_list(intel.get('legal_risks')),
+        'hot_topics': _json_string_list(intel.get('hot_topics')),
+        'gossip_signals': _json_string_list(intel.get('gossip_signals')),
+        'industries': _json_string_list(intel.get('industries')),
+        'signal_types': [v.lower() for v in _json_string_list(intel.get('signal_types')) if v.lower() in MARKET_SIGNAL_TYPE_KEYS],
+        'key_people': _json_string_list(intel.get('key_people')),
+        'timeline_points': _json_string_list(intel.get('timeline_points')),
+    }
+
+
+def _json_string_list(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item or '').strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(text)
+    return items
 
 
 def _pagination_meta(total: int, page: int, page_size: int) -> dict:
@@ -365,7 +502,7 @@ def login_page(request: Request):
 
 @app.post('/login')
 def login_submit(request: Request, password: str = Form(default='')):
-    if secrets.compare_digest(password.strip(), settings.auth_password):
+    if _auth_password_configured() and secrets.compare_digest(password.strip(), settings.auth_password.strip()):
         # Validate next is a safe relative path (prevent open redirect)
         next_url = request.query_params.get('next', '/')
         if not next_url.startswith('/'):
@@ -380,6 +517,14 @@ def login_submit(request: Request, password: str = Form(default='')):
             samesite='lax',
             secure=is_secure,
         )
+        resp.set_cookie(
+            _CSRF_COOKIE_NAME,
+            _csrf_token(request),
+            max_age=86400 * 30,
+            httponly=False,
+            samesite='lax',
+            secure=is_secure,
+        )
         return resp
     return RedirectResponse('/login?error=invalid', status_code=303)
 
@@ -388,6 +533,7 @@ def login_submit(request: Request, password: str = Form(default='')):
 def logout():
     resp = RedirectResponse('/login', status_code=303)
     resp.delete_cookie('auth_token', path='/')
+    resp.delete_cookie(_CSRF_COOKIE_NAME, path='/')
     return resp
 
 
@@ -427,10 +573,11 @@ def _jinja2_t(context, key: str, **kwargs) -> str:
 
 templates.env.globals['t'] = _jinja2_t
 templates.env.globals['get_lang'] = _get_lang
+templates.env.globals['csrf_field_name'] = _CSRF_FORM_FIELD
+templates.env.globals['csrf_token'] = _csrf_token
 
 
 def _migrate_existing_urls() -> None:
-    import hashlib
     from sqlalchemy import select
     with session_scope() as db:
         if db.execute(select(func.count(AiUrl.id))).scalar_one():
@@ -455,7 +602,8 @@ def _migrate_existing_urls() -> None:
                 for url in url_list:
                     if not isinstance(url, str) or not url.strip():
                         continue
-                    h = hashlib.sha256(url.encode('utf-8')).hexdigest()
+                    canonical_url = normalize_url_for_dedup(url)
+                    h = hashlib.sha256(canonical_url.encode('utf-8')).hexdigest()
                     if h in seen_hashes:
                         continue
                     seen_hashes.add(h)
@@ -463,10 +611,12 @@ def _migrate_existing_urls() -> None:
                     if row:
                         row.last_seen_at = max(row.last_seen_at, s.completed_at or s.triggered_at)
                     else:
+                        parsed = urlsplit(canonical_url)
                         to_insert.append(AiUrl(
-                            url=url,
+                            url=canonical_url,
                             url_hash=h,
                             category=category,
+                            domain=parsed.netloc or None,
                             first_seen_at=s.completed_at or s.triggered_at,
                             last_seen_at=s.completed_at or s.triggered_at,
                         ))
@@ -499,6 +649,26 @@ def dashboard(request: Request):
 def chats_page(request: Request):
     with session_scope() as db:
         chats = db.execute(select(MonitoredChat).order_by(MonitoredChat.updated_at.desc())).scalars().all()
+        if chats:
+            chat_ids = [c.id for c in chats]
+            last_24h = datetime.utcnow() - timedelta(hours=24)
+            stats_rows = db.execute(
+                select(
+                    Message.chat_id,
+                    func.count(Message.id).label('message_count'),
+                    func.sum(case((Message.message_date >= last_24h, 1), else_=0)).label('messages_24h'),
+                    func.count(func.distinct(Message.sender_user_id)).label('unique_senders'),
+                    func.max(Message.message_date).label('last_msg'),
+                ).where(Message.chat_id.in_(chat_ids)).group_by(Message.chat_id)
+            ).all()
+            stats_map = {row.chat_id: row for row in stats_rows}
+            for chat in chats:
+                row = stats_map.get(chat.id)
+                chat.message_count = int(row.message_count) if row else 0
+                chat.messages_24h = int(row.messages_24h) if row else 0
+                chat.unique_senders = int(row.unique_senders) if row else 0
+                if row and row.last_msg and not chat.last_message_at:
+                    chat.last_message_at = row.last_msg
     return templates.TemplateResponse(
         request=request,
         name='chats.html',
@@ -552,12 +722,15 @@ def batch_toggle_chats(request: Request, chat_ids: list[int] = Form(default=[]),
 
 
 @app.post('/chats/toggle-all')
-def toggle_all_chats(request: Request, action: str = Form(...)):
+def toggle_all_chats(request: Request, action: str = Form(...), chat_ids: list[int] = Form(default=[])):
     if action not in ('enable', 'disable'):
         return redirect_with_message('/chats', _t(request, 'chats.flash_invalid_action'), 'error')
     target = action == 'enable'
     with session_scope() as db:
-        updated = db.execute(select(MonitoredChat)).scalars().all()
+        query = select(MonitoredChat)
+        if chat_ids:
+            query = query.where(MonitoredChat.id.in_(chat_ids))
+        updated = db.execute(query).scalars().all()
         for chat in updated:
             chat.is_active = target
     action_label = _t(request, 'chats.flash_enable') if target else _t(request, 'chats.flash_disable')
@@ -572,6 +745,160 @@ async def sync_dialogs(request: Request):
     except Exception as exc:
         logger.exception('sync dialogs failed')
         return redirect_with_message('/chats', _t(request, 'chats.flash_sync_failed', error=exc), 'error')
+
+
+@app.get('/join-targets', response_class=HTMLResponse)
+def join_targets_page(request: Request, status: str | None = None, keyword: str | None = None, page: int = 1):
+    page_size = 30
+    page = max(page, 1)
+    selected_status = (status or '').strip()
+    if selected_status not in JOIN_STATUS_KEYS:
+        selected_status = ''
+    keyword = (keyword or '').strip()
+
+    with session_scope() as db:
+        count_rows = db.execute(
+            select(TelegramJoinTarget.status, func.count(TelegramJoinTarget.id))
+            .group_by(TelegramJoinTarget.status)
+        ).all()
+        status_counts = {row[0]: row[1] for row in count_rows}
+        total_targets = sum(status_counts.values())
+        source_counts = {
+            'auto': db.execute(
+                select(func.count(TelegramJoinTarget.id)).where(TelegramJoinTarget.title.like('auto:%'))
+            ).scalar_one(),
+            'manual': db.execute(
+                select(func.count(TelegramJoinTarget.id)).where(
+                    or_(TelegramJoinTarget.title.is_(None), ~TelegramJoinTarget.title.like('auto:%'))
+                )
+            ).scalar_one(),
+        }
+
+        query = select(TelegramJoinTarget).outerjoin(TelegramJoinTarget.monitored_chat)
+        if selected_status:
+            query = query.where(TelegramJoinTarget.status == selected_status)
+        if keyword:
+            like = f'%{keyword}%'
+            query = query.where(or_(
+                TelegramJoinTarget.source.like(like),
+                TelegramJoinTarget.normalized_key.like(like),
+                TelegramJoinTarget.title.like(like),
+                MonitoredChat.title.like(like),
+                MonitoredChat.username.like(like),
+            ))
+
+        count_query = select(func.count()).select_from(query.order_by(None).subquery())
+        total_count = db.execute(count_query).scalar_one()
+        targets = db.execute(
+            query.order_by(TelegramJoinTarget.created_at.desc(), TelegramJoinTarget.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).scalars().unique().all()
+        for target in targets:
+            if target.monitored_chat:
+                target.monitored_chat.title
+
+    total_pages = max((total_count + page_size - 1) // page_size, 1)
+    page_params = {}
+    if selected_status:
+        page_params['status'] = selected_status
+    if keyword:
+        page_params['keyword'] = keyword
+    return templates.TemplateResponse(
+        request=request,
+        name='join_targets.html',
+        context={
+            'request': request,
+            'targets': targets,
+            'status_counts': status_counts,
+            'source_counts': source_counts,
+            'total_targets': total_targets,
+            'selected_status': selected_status,
+            'keyword': keyword,
+            'page': page,
+            'page_size': page_size,
+            'total_count': total_count,
+            'total_pages': total_pages,
+            'has_prev': page > 1,
+            'has_next': page < total_pages,
+            'page_base_params': urlencode(page_params),
+            'join_interval_minutes': settings.telegram_join_interval_minutes,
+            'join_queue_enabled': settings.telegram_join_queue_enabled,
+            'msg': request.query_params.get('msg', ''),
+            'level': request.query_params.get('level', 'info'),
+        },
+    )
+
+
+@app.post('/join-targets/add')
+def add_join_targets(request: Request, targets: str = Form(default='')):
+    result = enqueue_join_targets(targets)
+    invalid_count = len(result['invalid'])
+    return redirect_with_message(
+        '/join-targets',
+        _t(
+            request,
+            'join_targets.flash_added',
+            inserted=result['inserted'],
+            existing=result['existing'],
+            invalid=invalid_count,
+        ),
+        'success' if result['inserted'] else 'info',
+    )
+
+
+@app.post('/join-targets/discover-sync')
+async def discover_and_sync_join_targets(request: Request):
+    try:
+        discover_result = discover_join_targets_from_collected_data()
+        dialog_count = await collector.sync_dialogs()
+        sync_result = sync_join_targets_with_monitored_chats()
+        return redirect_with_message(
+            '/join-targets',
+            _t(
+                request,
+                'join_targets.flash_discovered',
+                scanned=discover_result['scanned'],
+                inserted=discover_result['inserted'],
+                existing=discover_result['existing'],
+                dialogs=dialog_count,
+                updated=sync_result['updated'],
+            ),
+            'success',
+        )
+    except Exception as exc:
+        logger.exception('sync join targets failed')
+        return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_sync_failed', error=exc), 'error')
+
+
+@app.post('/join-targets/sync-current')
+async def sync_join_targets(request: Request):
+    return await discover_and_sync_join_targets(request)
+
+
+@app.post('/join-targets/run-once')
+async def run_join_targets_once(request: Request):
+    try:
+        result = await collector.run_join_queue_once()
+        status = result.get('status', 'unknown')
+        return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_run_once', status=status), 'success')
+    except Exception as exc:
+        logger.exception('run join target once failed')
+        return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_run_failed', error=exc), 'error')
+
+
+@app.post('/join-targets/{target_id}/retry')
+def retry_join_target(request: Request, target_id: int):
+    with session_scope() as db:
+        target = db.get(TelegramJoinTarget, target_id)
+        if not target:
+            return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_not_found'), 'error')
+        if target.status in {'joined', 'already_joined'}:
+            return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_already_joined'), 'info')
+        target.status = 'pending'
+        target.last_error = None
+        target.next_attempt_at = None
+    return redirect_with_message('/join-targets', _t(request, 'join_targets.flash_retry'), 'success')
 
 
 @app.get('/messages', response_class=HTMLResponse)
@@ -619,12 +946,14 @@ def messages_page(request: Request, chat_id: str | None = None, keyword: str | N
                 'media_type': item.media_type or '',
             }
             if group_key not in grouped_rows:
+                sender_obj = senders.get(item.sender_user_id) if item.sender_user_id else None
                 grouped_rows[group_key] = {
                     'message': item,
                     'chat_title': chat_titles.get(item.chat_id, str(item.chat_id)),
                     'sender_name': (
-                        senders[item.sender_user_id].username or senders[item.sender_user_id].first_name or str(senders[item.sender_user_id].telegram_id)
-                    ) if item.sender_user_id and item.sender_user_id in senders else 'Unknown',
+                        sender_obj.username or sender_obj.first_name or str(sender_obj.telegram_id)
+                    ) if sender_obj else 'Unknown',
+                    'sender_user_id': item.sender_user_id,
                     'display_text': item.raw_text or '',
                     'media_items': [media_item] if media_item['media_url'] or media_item['media_type'] else [],
                     'grouped_id': grouped_id,
@@ -717,6 +1046,8 @@ async def settings_page(request: Request):
             'background_collection_enabled': settings.telegram_background_collection_enabled,
             'download_media_enabled': settings.telegram_download_media_enabled,
             'fetch_user_about_enabled': settings.telegram_fetch_user_about_enabled,
+            'telegram_join_queue_enabled': settings.telegram_join_queue_enabled,
+            'telegram_join_interval_minutes': settings.telegram_join_interval_minutes,
             'sync_interval_minutes': settings.sync_interval_minutes,
             'sync_batch_size': settings.sync_batch_size,
             'sync_lookback_messages': settings.sync_lookback_messages,
@@ -824,10 +1155,12 @@ async def save_runtime_config(
     live_listener_enabled: bool = Form(default=False),
     download_media_enabled: bool = Form(default=False),
     fetch_user_about_enabled: bool = Form(default=False),
+    telegram_join_queue_enabled: bool = Form(default=False),
+    telegram_join_interval_minutes: int = Form(default=10),
     sync_interval_minutes: int = Form(default=5),
     sync_batch_size: int = Form(default=200),
     sync_lookback_messages: int = Form(default=1000),
-    ai_summary_batch_size: int = Form(default=100),
+    ai_summary_batch_size: int = Form(default=1000),
     ai_summary_running_timeout_minutes: int = Form(default=30),
     url_classification_enabled: bool = Form(default=False),
     url_classification_interval_minutes: int = Form(default=30),
@@ -844,6 +1177,7 @@ async def save_runtime_config(
     sync_lookback_messages = min(max(sync_lookback_messages, 100), 10000)
     ai_summary_batch_size = min(max(ai_summary_batch_size, 20), 1000)
     ai_summary_running_timeout_minutes = min(max(ai_summary_running_timeout_minutes, 5), 1440)
+    telegram_join_interval_minutes = min(max(telegram_join_interval_minutes, 10), 1440)
     url_classification_interval_minutes = min(max(url_classification_interval_minutes, 1), 1440)
     url_classification_batch_size = min(max(url_classification_batch_size, 1), 200)
     key_lead_analysis_interval_minutes = min(max(key_lead_analysis_interval_minutes, 1), 1440)
@@ -855,6 +1189,8 @@ async def save_runtime_config(
         'telegram_live_listener_enabled': live_listener_enabled,
         'telegram_download_media_enabled': download_media_enabled,
         'telegram_fetch_user_about_enabled': fetch_user_about_enabled,
+        'telegram_join_queue_enabled': telegram_join_queue_enabled,
+        'telegram_join_interval_minutes': telegram_join_interval_minutes,
         'sync_interval_minutes': sync_interval_minutes,
         'sync_batch_size': sync_batch_size,
         'sync_lookback_messages': sync_lookback_messages,
@@ -873,6 +1209,8 @@ async def save_runtime_config(
         'TELEGRAM_LIVE_LISTENER_ENABLED': _env_bool(live_listener_enabled),
         'TELEGRAM_DOWNLOAD_MEDIA_ENABLED': _env_bool(download_media_enabled),
         'TELEGRAM_FETCH_USER_ABOUT_ENABLED': _env_bool(fetch_user_about_enabled),
+        'TELEGRAM_JOIN_QUEUE_ENABLED': _env_bool(telegram_join_queue_enabled),
+        'TELEGRAM_JOIN_INTERVAL_MINUTES': str(telegram_join_interval_minutes),
         'SYNC_INTERVAL_MINUTES': str(sync_interval_minutes),
         'SYNC_BATCH_SIZE': str(sync_batch_size),
         'SYNC_LOOKBACK_MESSAGES': str(sync_lookback_messages),
@@ -953,6 +1291,102 @@ def summaries_page(request: Request, chat_id: str | None = None, page: int = 1):
             'total_pages': total_pages,
             'has_prev': page > 1,
             'has_next': page < total_pages,
+            'ai_summary_batch_size': settings.ai_summary_batch_size,
+            'msg': request.query_params.get('msg', ''),
+            'level': request.query_params.get('level', 'info'),
+        },
+    )
+
+
+@app.get('/market-intel', response_class=HTMLResponse)
+def market_intel_page(
+    request: Request,
+    chat_id: str | None = None,
+    industry: str | None = None,
+    signal_type: str | None = None,
+    page: int = 1,
+):
+    page_size = 20
+    page = max(page, 1)
+    selected_chat_id = _parse_optional_int(chat_id)
+    selected_industry = (industry or '').strip()
+    selected_signal_type = (signal_type or '').strip().lower()
+    if selected_signal_type not in MARKET_SIGNAL_TYPE_KEYS:
+        selected_signal_type = ''
+
+    with session_scope() as db:
+        chats = db.execute(select(MonitoredChat).order_by(MonitoredChat.title.asc())).scalars().all()
+        query = select(AiSummary).where(AiSummary.status == 'success')
+        if selected_chat_id:
+            query = query.where(AiSummary.chat_id == selected_chat_id)
+        summaries = db.execute(
+            query.order_by(AiSummary.completed_at.desc(), AiSummary.id.desc())
+        ).scalars().all()
+        chat_map = {c.id: c.title for c in chats}
+
+    industry_counts: dict[str, int] = {}
+    signal_type_counts: dict[str, int] = {key: 0 for key in MARKET_SIGNAL_TYPE_KEYS}
+    rows = []
+    for summary in summaries:
+        intel = _market_intelligence_payload(summary)
+        extracted = summary.extracted_urls or {}
+
+        for item in intel['industries']:
+            industry_counts[item] = industry_counts.get(item, 0) + 1
+        for item in intel['signal_types']:
+            signal_type_counts[item] = signal_type_counts.get(item, 0) + 1
+
+        if selected_industry and selected_industry not in intel['industries']:
+            continue
+        if selected_signal_type and selected_signal_type not in intel['signal_types']:
+            continue
+
+        people = []
+        for value in intel['key_people'] + _json_string_list(extracted.get('top_senders') if isinstance(extracted, dict) else []):
+            if value not in people:
+                people.append(value)
+
+        rows.append({
+            'summary': summary,
+            'chat_title': chat_map.get(summary.chat_id, str(summary.chat_id)),
+            'intel': intel,
+            'people': people[:8],
+        })
+
+    total_count = len(rows)
+    total_pages = max((total_count + page_size - 1) // page_size, 1)
+    page_rows = rows[(page - 1) * page_size:page * page_size]
+    page_params = {}
+    if selected_chat_id:
+        page_params['chat_id'] = str(selected_chat_id)
+    if selected_industry:
+        page_params['industry'] = selected_industry
+    if selected_signal_type:
+        page_params['signal_type'] = selected_signal_type
+    encoded_params = urlencode(page_params)
+    page_url_prefix = f'/market-intel?{encoded_params}&page=' if encoded_params else '/market-intel?page='
+
+    return templates.TemplateResponse(
+        request=request,
+        name='market_intel.html',
+        context={
+            'request': request,
+            'rows': page_rows,
+            'chats': chats,
+            'selected_chat_id': selected_chat_id,
+            'selected_industry': selected_industry,
+            'selected_signal_type': selected_signal_type,
+            'industry_counts': sorted(industry_counts.items(), key=lambda item: (-item[1], item[0])),
+            'signal_type_counts': signal_type_counts,
+            'signal_type_labels': {k: _t(request, v) for k, v in MARKET_SIGNAL_TYPE_KEYS.items()},
+            'page': page,
+            'page_size': page_size,
+            'total_count': total_count,
+            'total_pages': total_pages,
+            'has_prev': page > 1,
+            'has_next': page < total_pages,
+            'page_url_prefix': page_url_prefix,
+            'ai_summary_batch_size': settings.ai_summary_batch_size,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
         },
@@ -1024,6 +1458,7 @@ def urls_page(
                 (AiUrl.classification_status.in_(('pending', 'failed')))
             )
         ).scalar_one()
+        duplicate_stats = url_duplicate_stats(limit=8)
     total_pages = max((total_count + page_size - 1) // page_size, 1)
     return templates.TemplateResponse(
         request=request,
@@ -1053,6 +1488,7 @@ def urls_page(
             'status_counts': status_counts,
             'recent_classification_runs': recent_classification_runs,
             'pending_classification_count': pending_classification_count,
+            'duplicate_stats': duplicate_stats,
             'url_classification_batch_size': settings.url_classification_batch_size,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
@@ -1070,6 +1506,20 @@ async def classify_urls_now(
     batch_size = min(max(batch_size, 1), 200)
     background_tasks.add_task(_run_url_classification_background, batch_size, include_classified)
     return redirect_with_message('/urls', f'URL 分类任务已提交，后台将处理最多 {batch_size} 条', 'info')
+
+
+@app.post('/urls/deduplicate')
+def deduplicate_urls_now(request: Request):
+    try:
+        result = deduplicate_existing_urls()
+        return redirect_with_message(
+            '/urls',
+            f"URL 去重完成：合并 {result['groups_merged']} 组，删除 {result['rows_removed']} 条重复，规范化 {result['rows_normalized']} 条",
+            'success',
+        )
+    except Exception as exc:
+        logger.exception('URL deduplication failed')
+        return redirect_with_message('/urls', f'URL 去重失败：{exc}', 'error')
 
 
 @app.get('/chats/{chat_id}', response_class=HTMLResponse)
@@ -1195,40 +1645,198 @@ def dashboard_api():
 
 PRODUCT_STATUS_KEYS = {'available': 'common.available', 'sold': 'common.sold', 'reserved': 'common.reserved'}
 PRODUCT_STATUS_ORDER = ['available', 'sold', 'reserved']
+PRODUCT_CATEGORY_KEYS = {
+    'ai_api': 'products.category_ai_api',
+    'account': 'products.category_account',
+    'relay': 'products.category_relay',
+    'cloud_drive': 'products.category_cloud_drive',
+    'payment': 'products.category_payment',
+    'other': 'products.category_other',
+}
+PRODUCT_CATEGORY_ORDER = ['ai_api', 'account', 'relay', 'cloud_drive', 'payment', 'other']
+PRODUCT_CATEGORY_TERMS = {
+    'ai_api': ['api', 'key', '额度', 'credits', 'openai', 'claude', 'gemini', 'grok', 'groq', 'openrouter'],
+    'account': ['账号', '号', '实名', '接码', '号码', 'tg', 'telegram', '会员', '成品号'],
+    'relay': ['中转', '节点', '代理', 'vpn', 'vps', 'relay', '转发', '流量'],
+    'cloud_drive': ['网盘', '夸克', '百度云', '阿里云盘', 'drive', '资料', '教程'],
+    'payment': ['支付', '店铺', '充值', '卡密', '直充', '收款', 'payment'],
+}
+
+
+def _product_category(product: AiProduct) -> str:
+    text = f'{product.product_name or ""} {product.seller_contact or ""}'.lower()
+    for category in PRODUCT_CATEGORY_ORDER:
+        if category == 'other':
+            continue
+        if any(term.lower() in text for term in PRODUCT_CATEGORY_TERMS[category]):
+            return category
+    return 'other'
+
+
+def _product_category_clause(category: str):
+    terms = PRODUCT_CATEGORY_TERMS.get(category)
+    if category == 'other':
+        all_terms = [term for category_terms in PRODUCT_CATEGORY_TERMS.values() for term in category_terms]
+        positive_clauses = []
+        for term in all_terms:
+            like = f'%{term}%'
+            positive_clauses.append(AiProduct.product_name.like(like))
+            positive_clauses.append(func.coalesce(AiProduct.seller_contact, '').like(like))
+        return ~or_(*positive_clauses)
+    if not terms:
+        return None
+    clauses = []
+    for term in terms:
+        like = f'%{term}%'
+        clauses.append(AiProduct.product_name.like(like))
+        clauses.append(func.coalesce(AiProduct.seller_contact, '').like(like))
+    return or_(*clauses)
+
+
+def _product_group_key(name: str) -> str:
+    return re.sub(r'\s+', ' ', (name or '').strip().lower())
+
+
+def _product_aggregates(products: list[AiProduct]) -> dict:
+    groups: dict[str, dict] = {}
+    sellers: set[str] = set()
+    known_price_count = 0
+    for product in products:
+        if product.seller_contact:
+            sellers.add(product.seller_contact.lower())
+        if product.price_amount is not None:
+            known_price_count += 1
+        key = _product_group_key(product.product_name)
+        if not key:
+            continue
+        group = groups.setdefault(key, {
+            'name': product.product_name,
+            'count': 0,
+            'prices': [],
+            'currencies': set(),
+            'sellers': set(),
+            'chat_ids': set(),
+            'last_seen_at': product.last_seen_at,
+        })
+        group['count'] += 1
+        group['chat_ids'].add(product.chat_id)
+        if product.price_currency:
+            group['currencies'].add(product.price_currency)
+        if product.seller_contact:
+            group['sellers'].add(product.seller_contact)
+        if product.price_amount is not None:
+            group['prices'].append(float(product.price_amount))
+        if product.last_seen_at and (not group['last_seen_at'] or product.last_seen_at > group['last_seen_at']):
+            group['last_seen_at'] = product.last_seen_at
+
+    comparisons = []
+    for group in groups.values():
+        prices = group['prices']
+        if not prices:
+            continue
+        comparisons.append({
+            'name': group['name'],
+            'count': group['count'],
+            'min_price': min(prices),
+            'max_price': max(prices),
+            'avg_price': round(sum(prices) / len(prices), 2),
+            'currency': ', '.join(sorted(group['currencies'])) or 'CNY',
+            'seller_count': len(group['sellers']),
+            'chat_count': len(group['chat_ids']),
+            'last_seen_at': group['last_seen_at'],
+        })
+    comparisons.sort(key=lambda item: (item['max_price'] - item['min_price'], item['count']), reverse=True)
+    return {
+        'total': len(products),
+        'group_count': len(groups),
+        'known_price_count': known_price_count,
+        'seller_count': len(sellers),
+        'comparisons': comparisons[:12],
+    }
 
 
 @app.get('/products', response_class=HTMLResponse)
-def products_page(request: Request, status: str | None = None, chat_id: str | None = None, page: int = 1):
+def products_page(
+    request: Request,
+    status: str | None = None,
+    category: str | None = None,
+    chat_id: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+):
     page_size = 50
     page = max(page, 1)
     selected_chat_id = _parse_optional_int(chat_id)
+    selected_category = category if category in PRODUCT_CATEGORY_KEYS else None
+    keyword = (keyword or '').strip()
     with session_scope() as db:
-        query = select(AiProduct).order_by(AiProduct.last_seen_at.desc())
+        filtered_base_query = select(AiProduct)
+        if selected_chat_id:
+            filtered_base_query = filtered_base_query.where(AiProduct.chat_id == selected_chat_id)
+        if keyword:
+            like = f'%{keyword}%'
+            filtered_base_query = filtered_base_query.where(
+                (AiProduct.product_name.like(like)) |
+                (func.coalesce(AiProduct.seller_contact, '').like(like))
+            )
+        base_query = filtered_base_query
+        category_clause = _product_category_clause(selected_category) if selected_category else None
+        if category_clause is not None:
+            base_query = base_query.where(category_clause)
+
+        status_counts = {}
+        for s in PRODUCT_STATUS_ORDER:
+            status_counts[s] = db.execute(
+                select(func.count()).select_from(base_query.where(AiProduct.status == s).subquery())
+            ).scalar_one()
+
+        category_counts = {}
+        for cat in PRODUCT_CATEGORY_ORDER:
+            clause = _product_category_clause(cat)
+            count_query = filtered_base_query if clause is None else filtered_base_query.where(clause)
+            if status in PRODUCT_STATUS_KEYS:
+                count_query = count_query.where(AiProduct.status == status)
+            category_counts[cat] = db.execute(select(func.count()).select_from(count_query.subquery())).scalar_one()
+
+        query = base_query.order_by(AiProduct.last_seen_at.desc())
         if status in PRODUCT_STATUS_KEYS:
             query = query.where(AiProduct.status == status)
-        if selected_chat_id:
-            query = query.where(AiProduct.chat_id == selected_chat_id)
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         total_count = db.execute(count_query).scalar_one()
         products = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
-        counts = {}
-        for s in PRODUCT_STATUS_ORDER:
-            counts[s] = db.execute(
-                select(func.count(AiProduct.id)).where(AiProduct.status == s)
-            ).scalar_one()
+        aggregate_products = db.execute(query.order_by(None)).scalars().all()
+        product_rows = [{'product': product, 'category': _product_category(product)} for product in products]
+        aggregates = _product_aggregates(aggregate_products)
         chats = db.execute(select(MonitoredChat).where(MonitoredChat.is_active.is_(True))).scalars().all()
     total_pages = max((total_count + page_size - 1) // page_size, 1)
+    page_params = {}
+    if status in PRODUCT_STATUS_KEYS:
+        page_params['status'] = status
+    if selected_category:
+        page_params['category'] = selected_category
+    if selected_chat_id:
+        page_params['chat_id'] = str(selected_chat_id)
+    if keyword:
+        page_params['keyword'] = keyword
+    encoded_params = urlencode(page_params)
+    page_url_prefix = f'/products?{encoded_params}&page=' if encoded_params else '/products?page='
     return templates.TemplateResponse(
         request=request,
         name='products.html',
         context={
             'request': request,
-            'products': products,
+            'products': product_rows,
             'selected_status': status,
+            'selected_category': selected_category,
             'selected_chat_id': selected_chat_id,
-            'counts': counts,
+            'keyword': keyword,
+            'counts': status_counts,
+            'category_counts': category_counts,
             'labels': {k: _t(request, v) for k, v in PRODUCT_STATUS_KEYS.items()},
+            'category_labels': {k: _t(request, v) for k, v in PRODUCT_CATEGORY_KEYS.items()},
             'order': PRODUCT_STATUS_ORDER,
+            'category_order': PRODUCT_CATEGORY_ORDER,
+            'aggregates': aggregates,
             'chats': chats,
             'page': page,
             'page_size': page_size,
@@ -1236,6 +1844,7 @@ def products_page(request: Request, status: str | None = None, chat_id: str | No
             'total_pages': total_pages,
             'has_prev': page > 1,
             'has_next': page < total_pages,
+            'page_url_prefix': page_url_prefix,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
         },
@@ -1249,6 +1858,44 @@ CONTACT_TYPE_KEYS = {
     'email': 'contacts.email', 'phone': 'contacts.phone', 'other': 'contacts.other',
 }
 CONTACT_TYPE_ORDER = ['tg_user', 'tg_group', 'email', 'phone', 'other']
+
+
+def _contact_aggregates(contacts: list[AiContact]) -> dict:
+    groups: dict[str, dict] = {}
+    for contact in contacts:
+        key = f'{contact.contact_type}:{(contact.contact_value or "").strip().lower()}'
+        group = groups.setdefault(key, {
+            'contact_type': contact.contact_type,
+            'contact_value': contact.contact_value,
+            'count': 0,
+            'chat_ids': set(),
+            'first_seen_at': contact.first_seen_at,
+            'last_seen_at': contact.last_seen_at,
+        })
+        group['count'] += 1
+        group['chat_ids'].add(contact.chat_id)
+        if contact.first_seen_at and (not group['first_seen_at'] or contact.first_seen_at < group['first_seen_at']):
+            group['first_seen_at'] = contact.first_seen_at
+        if contact.last_seen_at and (not group['last_seen_at'] or contact.last_seen_at > group['last_seen_at']):
+            group['last_seen_at'] = contact.last_seen_at
+
+    repeated = []
+    for group in groups.values():
+        repeated.append({
+            'contact_type': group['contact_type'],
+            'contact_value': group['contact_value'],
+            'count': group['count'],
+            'chat_count': len(group['chat_ids']),
+            'first_seen_at': group['first_seen_at'],
+            'last_seen_at': group['last_seen_at'],
+        })
+    repeated.sort(key=lambda item: (item['chat_count'], item['count'], item['last_seen_at'] or datetime.min), reverse=True)
+    return {
+        'total': len(contacts),
+        'unique_count': len(groups),
+        'multi_chat_count': len([item for item in repeated if item['chat_count'] > 1]),
+        'repeated': repeated[:12],
+    }
 
 
 @app.get('/api/urls')
@@ -1466,26 +2113,52 @@ def api_contacts(
 
 
 @app.get('/contacts', response_class=HTMLResponse)
-def contacts_page(request: Request, contact_type: str | None = None, chat_id: str | None = None, page: int = 1):
+def contacts_page(
+    request: Request,
+    contact_type: str | None = None,
+    chat_id: str | None = None,
+    keyword: str | None = None,
+    page: int = 1,
+):
     page_size = 50
     page = max(page, 1)
     selected_chat_id = _parse_optional_int(chat_id)
+    keyword = (keyword or '').strip()
     with session_scope() as db:
-        query = select(AiContact).order_by(AiContact.last_seen_at.desc())
-        if contact_type in CONTACT_TYPE_KEYS:
-            query = query.where(AiContact.contact_type == contact_type)
+        base_query = select(AiContact)
         if selected_chat_id:
-            query = query.where(AiContact.chat_id == selected_chat_id)
-        count_query = select(func.count()).select_from(query.order_by(None).subquery())
-        total_count = db.execute(count_query).scalar_one()
-        contacts = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+            base_query = base_query.where(AiContact.chat_id == selected_chat_id)
+        if keyword:
+            like = f'%{keyword}%'
+            base_query = base_query.where(
+                (AiContact.contact_value.like(like)) |
+                (func.coalesce(AiContact.context, '').like(like))
+            )
         counts = {}
         for t in CONTACT_TYPE_ORDER:
             counts[t] = db.execute(
-                select(func.count(AiContact.id)).where(AiContact.contact_type == t)
+                select(func.count()).select_from(base_query.where(AiContact.contact_type == t).subquery())
             ).scalar_one()
+
+        query = base_query.order_by(AiContact.last_seen_at.desc())
+        if contact_type in CONTACT_TYPE_KEYS:
+            query = query.where(AiContact.contact_type == contact_type)
+        count_query = select(func.count()).select_from(query.order_by(None).subquery())
+        total_count = db.execute(count_query).scalar_one()
+        contacts = db.execute(query.offset((page - 1) * page_size).limit(page_size)).scalars().all()
+        aggregate_contacts = db.execute(query.order_by(None)).scalars().all()
+        aggregates = _contact_aggregates(aggregate_contacts)
         chats = db.execute(select(MonitoredChat).where(MonitoredChat.is_active.is_(True))).scalars().all()
     total_pages = max((total_count + page_size - 1) // page_size, 1)
+    page_params = {}
+    if contact_type in CONTACT_TYPE_KEYS:
+        page_params['contact_type'] = contact_type
+    if selected_chat_id:
+        page_params['chat_id'] = str(selected_chat_id)
+    if keyword:
+        page_params['keyword'] = keyword
+    encoded_params = urlencode(page_params)
+    page_url_prefix = f'/contacts?{encoded_params}&page=' if encoded_params else '/contacts?page='
     return templates.TemplateResponse(
         request=request,
         name='contacts.html',
@@ -1494,9 +2167,11 @@ def contacts_page(request: Request, contact_type: str | None = None, chat_id: st
             'contacts': contacts,
             'selected_type': contact_type,
             'selected_chat_id': selected_chat_id,
+            'keyword': keyword,
             'counts': counts,
             'labels': {k: _t(request, v) for k, v in CONTACT_TYPE_KEYS.items()},
             'order': CONTACT_TYPE_ORDER,
+            'aggregates': aggregates,
             'chats': chats,
             'page': page,
             'page_size': page_size,
@@ -1504,6 +2179,7 @@ def contacts_page(request: Request, contact_type: str | None = None, chat_id: st
             'total_pages': total_pages,
             'has_prev': page > 1,
             'has_next': page < total_pages,
+            'page_url_prefix': page_url_prefix,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
         },
@@ -1712,6 +2388,140 @@ def mark_all_alerts_read(request: Request):
     return redirect_with_message('/alerts', _t(request, 'alerts.flash_all_read'), 'success')
 
 
+# ==================== Advanced Analytics Pages ====================
+
+@app.get('/price-trends', response_class=HTMLResponse)
+def price_trends_page(request: Request, chat_id: int | None = None, days: int = 30):
+    days = min(max(days, 1), 90)
+    with session_scope() as db:
+        chats = db.execute(select(MonitoredChat).order_by(MonitoredChat.title.asc())).scalars().all()
+        trends = analysis_advanced.get_price_trends(db, chat_id=chat_id, days=days)
+        seller_comparison = analysis_advanced.aggregate_seller_prices(db, days=days)
+    return templates.TemplateResponse(
+        request=request,
+        name='price_trends.html',
+        context={
+            'request': request,
+            'chats': chats,
+            'selected_chat_id': chat_id,
+            'days': days,
+            'trends': trends,
+            'seller_comparison': seller_comparison,
+        },
+    )
+
+
+@app.get('/system-events', response_class=HTMLResponse)
+def system_events_page(request: Request, severity: str | None = None, unread_only: bool = False):
+    with session_scope() as db:
+        query = db.query(SystemEvent).order_by(SystemEvent.created_at.desc())
+        if severity:
+            query = query.filter(SystemEvent.severity == severity)
+        if unread_only:
+            query = query.filter(SystemEvent.is_read.is_(False))
+        events = query.limit(100).all()
+    return templates.TemplateResponse(
+        request=request,
+        name='system_events.html',
+        context={
+            'request': request,
+            'events': events,
+            'selected_severity': severity or '',
+            'unread_only': unread_only,
+        },
+    )
+
+
+@app.get('/daily-briefs', response_class=HTMLResponse)
+def daily_briefs_page(request: Request, date: str | None = None):
+    from datetime import datetime as _dt
+    with session_scope() as db:
+        latest = None
+        if date:
+            try:
+                parsed = _dt.strptime(date, '%Y-%m-%d').date()
+                latest = db.query(DailyMarketBrief).filter(
+                    func.date(DailyMarketBrief.brief_date) == parsed,
+                ).first()
+            except ValueError:
+                pass
+        if not latest:
+            latest = db.query(DailyMarketBrief).order_by(DailyMarketBrief.brief_date.desc()).first()
+        briefs = db.query(DailyMarketBrief).order_by(DailyMarketBrief.brief_date.desc()).limit(30).all()
+    latest_payload = _daily_brief_payload(latest)
+    briefs_payload = [_daily_brief_payload(brief) for brief in briefs]
+    return templates.TemplateResponse(
+        request=request,
+        name='daily_briefs.html',
+        context={
+            'request': request,
+            'latest': latest,
+            'briefs': briefs,
+            'latest_payload': latest_payload,
+            'briefs_payload': briefs_payload,
+            'msg': request.query_params.get('msg', ''),
+            'level': request.query_params.get('level', 'info'),
+        },
+    )
+
+
+async def _generate_daily_brief_background() -> None:
+    try:
+        await generate_daily_brief()
+    except Exception:
+        logger.exception('background daily brief generation failed')
+
+
+@app.post('/daily-briefs/generate')
+def daily_briefs_generate(request: Request, background_tasks: BackgroundTasks):
+    background_tasks.add_task(_generate_daily_brief_background)
+    return redirect_with_message('/daily-briefs', _t(request, 'daily_briefs.flash_generating'), 'info')
+
+
+@app.get('/url-propagation', response_class=HTMLResponse)
+def url_propagation_page(request: Request, hours: int = 24):
+    hours = min(max(hours, 1), 168)
+    with session_scope() as db:
+        results = analysis_advanced.aggregate_url_propagation(db, hours=hours, limit=100)
+    return templates.TemplateResponse(
+        request=request,
+        name='url_propagation.html',
+        context={
+            'request': request,
+            'hours': hours,
+            'results': results,
+        },
+    )
+
+
+@app.get('/duplicate-messages', response_class=HTMLResponse)
+def duplicate_messages_page(request: Request):
+    with session_scope() as db:
+        duplicates = analysis_advanced.get_duplicate_message_groups(db, limit=100)
+    return templates.TemplateResponse(
+        request=request,
+        name='duplicate_messages.html',
+        context={
+            'request': request,
+            'duplicates': duplicates,
+        },
+    )
+
+
+@app.get('/user-profile/{user_id}', response_class=HTMLResponse)
+def user_profile_page(request: Request, user_id: int):
+    with session_scope() as db:
+        profile = analysis_advanced.build_user_profile(db, user_id)
+    return templates.TemplateResponse(
+        request=request,
+        name='user_profile.html',
+        context={
+            'request': request,
+            'profile': profile,
+        },
+    )
+
+
 @app.get('/api/alerts/unread')
 def unread_alerts_api():
     with session_scope() as db:
@@ -1753,4 +2563,134 @@ def url_stats_api():
         'cross_chat_urls': cross_chat,
         'reputation': reputation,
         'trend': trend,
+    })
+
+
+# ==================== Advanced Analytics API ====================
+
+@app.get('/api/price-trends')
+def price_trends_api(chat_id: int | None = None, days: int = 30):
+    with session_scope() as db:
+        trends = analysis_advanced.get_price_trends(db, chat_id=chat_id, days=days)
+    return JSONResponse({'trends': trends})
+
+
+@app.get('/api/seller-price-comparison')
+def seller_price_comparison_api(product_name: str | None = None, days: int = 30):
+    with session_scope() as db:
+        results = analysis_advanced.aggregate_seller_prices(db, product_name=product_name, days=days)
+    return JSONResponse({'results': results})
+
+
+@app.get('/api/market-intelligence')
+def market_intelligence_api(hours: int = 24):
+    with session_scope() as db:
+        data = analysis_advanced.aggregate_market_intelligence(db, hours=hours)
+    return JSONResponse(data)
+
+
+@app.get('/api/url-propagation')
+def url_propagation_api(hours: int = 24, limit: int = 20):
+    with session_scope() as db:
+        results = analysis_advanced.aggregate_url_propagation(db, hours=hours, limit=limit)
+    return JSONResponse({'results': results})
+
+
+@app.get('/api/user-profile/{user_id}')
+def user_profile_api(user_id: int):
+    with session_scope() as db:
+        profile = analysis_advanced.build_user_profile(db, user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail='User not found')
+    return JSONResponse(profile)
+
+
+@app.get('/api/system-events')
+def system_events_api(severity: str | None = None, unread_only: bool = False, limit: int = 50):
+    with session_scope() as db:
+        query = db.query(SystemEvent)
+        if severity:
+            query = query.filter(SystemEvent.severity == severity)
+        if unread_only:
+            query = query.filter(SystemEvent.is_read.is_(False))
+        rows = query.order_by(SystemEvent.created_at.desc()).limit(limit).all()
+    return JSONResponse({'events': [{
+        'id': r.id,
+        'event_type': r.event_type,
+        'severity': r.severity,
+        'chat_id': r.chat_id,
+        'title': r.title,
+        'detail': r.detail,
+        'metric_value': r.metric_value,
+        'is_read': r.is_read,
+        'created_at': r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]})
+
+
+@app.post('/api/system-events/{event_id}/read')
+def mark_system_event_read(event_id: int):
+    with session_scope() as db:
+        event = db.get(SystemEvent, event_id)
+        if event:
+            event.is_read = True
+    return JSONResponse({'ok': True})
+
+
+@app.post('/api/system-events/read-all')
+def mark_all_system_events_read():
+    with session_scope() as db:
+        db.query(SystemEvent).filter(SystemEvent.is_read.is_(False)).update({SystemEvent.is_read: True})
+    return JSONResponse({'ok': True})
+
+
+@app.get('/api/duplicate-messages')
+def duplicate_messages_api(limit: int = 50):
+    with session_scope() as db:
+        results = analysis_advanced.get_duplicate_message_groups(db, limit=limit)
+    return JSONResponse({'duplicates': results})
+
+
+@app.post('/api/analyze/daily-stats')
+def analyze_daily_stats():
+    with session_scope() as db:
+        chat_count = analysis_advanced.compute_daily_chat_stats(db)
+        user_count = analysis_advanced.compute_user_daily_aggregates(db)
+    return JSONResponse({'chat_stats_updated': chat_count, 'user_stats_updated': user_count})
+
+
+@app.post('/api/analyze/anomalies')
+def analyze_anomalies():
+    with session_scope() as db:
+        events = analysis_advanced.detect_chat_anomalies(db)
+    return JSONResponse({'events': events})
+
+
+@app.get('/api/daily-briefs')
+def daily_briefs_api(limit: int = 30):
+    with session_scope() as db:
+        rows = db.query(DailyMarketBrief).order_by(DailyMarketBrief.brief_date.desc()).limit(limit).all()
+    return JSONResponse({'briefs': [{
+        'id': r.id,
+        'brief_date': r.brief_date.isoformat() if r.brief_date else None,
+        'title': r.title,
+        'risk_level': r.risk_level,
+        'created_at': r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]})
+
+
+@app.get('/api/daily-briefs/latest')
+def daily_brief_latest_api():
+    with session_scope() as db:
+        row = db.query(DailyMarketBrief).order_by(DailyMarketBrief.brief_date.desc()).first()
+    if not row:
+        raise HTTPException(status_code=404, detail='No brief found')
+    return JSONResponse({
+        'id': row.id,
+        'brief_date': row.brief_date.isoformat() if row.brief_date else None,
+        'title': row.title,
+        'content': row.content,
+        'signals_json': row.signals_json,
+        'hot_topics_json': row.hot_topics_json,
+        'risk_level': row.risk_level,
+        'price_moves_json': row.price_moves_json,
     })

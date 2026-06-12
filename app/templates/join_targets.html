@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}{{ t('join_targets.title') }} - TG Monitor{% endblock %}
+{% block content %}
+{% set statuses = ['pending', 'joined', 'already_joined', 'need_approval', 'failed', 'skipped'] %}
+
+<div class="page-header">
+  <div>
+    <h2>{{ t('join_targets.title') }}</h2>
+    <div class="page-desc">{{ t('join_targets.desc', interval=join_interval_minutes) }}</div>
+  </div>
+  <div class="page-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+    <form action="/join-targets/discover-sync" method="post" data-loading-form>
+      <button class="btn btn-secondary" type="submit" data-loading-text="{{ t('join_targets.syncing') }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        {{ t('join_targets.discover_sync') }}
+      </button>
+    </form>
+    <form action="/join-targets/run-once" method="post" data-loading-form>
+      <button class="btn btn-primary" type="submit" data-loading-text="{{ t('join_targets.running') }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        {{ t('join_targets.run_once') }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+    </div>
+    <div class="label">{{ t('join_targets.total') }}</div>
+    <div class="value">{{ total_targets }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+    </div>
+    <div class="label">{{ t('join_targets.status_pending') }}</div>
+    <div class="value">{{ status_counts.get('pending', 0) }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+    </div>
+    <div class="label">{{ t('join_targets.joined_total') }}</div>
+    <div class="value">{{ status_counts.get('joined', 0) + status_counts.get('already_joined', 0) }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon red">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    </div>
+    <div class="label">{{ t('join_targets.need_attention') }}</div>
+    <div class="value">{{ status_counts.get('need_approval', 0) + status_counts.get('failed', 0) }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon blue">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M6 12h12"/><path d="M10 17h4"/></svg>
+    </div>
+    <div class="label">{{ t('join_targets.auto_source') }}</div>
+    <div class="value">{{ source_counts.auto }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+    <div>
+      <h3 style="margin-bottom: 4px;">{{ t('join_targets.auto_discovery_title') }}</h3>
+      <div style="font-size: 13px; color: var(--text-secondary);">{{ t('join_targets.auto_discovery_desc') }}</div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+      <span class="badge {{ 'badge-green' if join_queue_enabled else 'badge-red' }}">
+        {{ t('common.enabled') if join_queue_enabled else t('common.disabled') }}
+      </span>
+      <span style="font-size: 13px; color: var(--text-secondary);">{{ t('join_targets.interval_label', interval=join_interval_minutes) }}</span>
+    </div>
+  </div>
+</div>
+
+<details class="panel" style="padding: 16px;">
+  <summary style="cursor: pointer; font-weight: 600;">{{ t('join_targets.manual_fallback') }}</summary>
+  <form action="/join-targets/add" method="post" class="form-vertical">
+    <div class="form-group" style="margin-top: 14px;">
+      <label>{{ t('join_targets.add_targets') }}</label>
+      <textarea name="targets" rows="5" placeholder="{{ t('join_targets.add_placeholder') }}" style="width: 100%; resize: vertical;"></textarea>
+      <span class="help-text">{{ t('join_targets.add_help') }}</span>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+      <button type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        {{ t('join_targets.add_button') }}
+      </button>
+      <div style="font-size: 13px; color: var(--text-secondary);">
+        {{ t('join_targets.queue_state') }}:
+        <span class="badge {{ 'badge-green' if join_queue_enabled else 'badge-red' }}">
+          {{ t('common.enabled') if join_queue_enabled else t('common.disabled') }}
+        </span>
+      </div>
+    </div>
+  </form>
+</details>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" action="/join-targets" class="form-vertical">
+    <div style="display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(180px, 0.8fr); gap: 12px;">
+      <div class="form-group">
+        <label>{{ t('join_targets.keyword') }}</label>
+        <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('join_targets.keyword_placeholder') }}">
+      </div>
+      <div class="form-group">
+        <label>{{ t('common.status') }}</label>
+        <select name="status">
+          <option value="">{{ t('common.all') }}</option>
+          {% for item in statuses %}
+          <option value="{{ item }}" {% if selected_status == item %}selected{% endif %}>{{ t('join_targets.status_' ~ item) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 8px;">
+        <button type="submit">{{ t('common.filter') }}</button>
+        <a class="btn btn-secondary" href="/join-targets">{{ t('common.reset') }}</a>
+      </div>
+      <div style="font-size: 13px; color: var(--text-secondary);">
+        {{ t('join_targets.filtered_count', count=total_count, total=total_targets) }}
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <div class="filter-tabs">
+    <a class="filter-tab {% if not selected_status %}active{% endif %}" href="/join-targets">
+      {{ t('common.all') }}<span class="count">{{ total_targets }}</span>
+    </a>
+    {% for item in statuses %}
+    <a class="filter-tab {% if selected_status == item %}active{% endif %}" href="/join-targets?status={{ item }}">
+      {{ t('join_targets.status_' ~ item) }}<span class="count">{{ status_counts.get(item, 0) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  {% if targets %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>{{ t('join_targets.target') }}</th>
+        <th>{{ t('join_targets.type') }}</th>
+        <th>{{ t('common.status') }}</th>
+        <th>{{ t('join_targets.attempts') }}</th>
+        <th>{{ t('join_targets.next_attempt') }}</th>
+        <th>{{ t('join_targets.monitored_chat') }}</th>
+        <th>{{ t('common.operation') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for target in targets %}
+      <tr>
+        <td>#{{ target.id }}</td>
+        <td style="max-width: 320px;">
+          <div style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ target.title or target.source }}</div>
+          <code style="display: block; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ target.normalized_key }}</code>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+            {{ t('join_targets.source') }}: {{ t('join_targets.source_auto') if target.title and target.title.startswith('auto:') else t('join_targets.source_manual') }}
+          </div>
+          {% if target.last_error %}
+          <div style="font-size: 12px; color: var(--red); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ target.last_error }}">{{ target.last_error }}</div>
+          {% endif %}
+        </td>
+        <td><span class="badge badge-blue">{{ target.target_type }}</span></td>
+        <td>
+          {% if target.status in ['joined', 'already_joined'] %}
+          <span class="badge badge-green">{{ t('join_targets.status_' ~ target.status) }}</span>
+          {% elif target.status == 'pending' %}
+          <span class="badge badge-amber">{{ t('join_targets.status_pending') }}</span>
+          {% elif target.status == 'need_approval' %}
+          <span class="badge badge-blue">{{ t('join_targets.status_need_approval') }}</span>
+          {% else %}
+          <span class="badge badge-red">{{ t('join_targets.status_' ~ target.status) }}</span>
+          {% endif %}
+        </td>
+        <td>{{ target.attempt_count or 0 }}</td>
+        <td style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">
+          {% if target.next_attempt_at %}{{ target.next_attempt_at | to_beijing }}{% else %}-{% endif %}
+        </td>
+        <td style="max-width: 220px;">
+          {% if target.monitored_chat %}
+          <a href="/chats/{{ target.monitored_chat.id }}">{{ target.monitored_chat.title }}</a>
+          <div style="font-size: 11px; color: var(--text-muted);">{% if target.monitored_chat.username %}@{{ target.monitored_chat.username }}{% else %}{{ target.monitored_chat.telegram_id }}{% endif %}</div>
+          {% else %}
+          <span style="color: var(--text-muted);">-</span>
+          {% endif %}
+        </td>
+        <td class="actions">
+          {% if target.status not in ['joined', 'already_joined', 'pending'] %}
+          <form action="/join-targets/{{ target.id }}/retry" method="post" style="display: inline;">
+            <button class="btn btn-xs btn-secondary" type="submit">{{ t('join_targets.retry') }}</button>
+          </form>
+          {% else %}
+          <span style="color: var(--text-muted);">-</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="pagination" style="padding: 12px 16px; justify-content: flex-end;">
+    <span class="info">{{ page }} / {{ total_pages }}</span>
+    {% if has_prev %}
+    <a class="btn btn-sm btn-secondary" href="/join-targets?{{ page_base_params }}{% if page_base_params %}&{% endif %}page={{ page - 1 }}">{{ t('common.prev') }}</a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn btn-sm btn-secondary" href="/join-targets?{{ page_base_params }}{% if page_base_params %}&{% endif %}page={{ page + 1 }}">{{ t('common.next') }}</a>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/><path d="M3 4v16"/></svg>
+    </div>
+    <div class="empty-title">{{ t('join_targets.empty_title') }}</div>
+    <div class="empty-desc">{{ t('join_targets.empty_desc') }}</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

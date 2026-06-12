@@ -8,6 +8,14 @@
   </div>
 </div>
 
+<nav class="settings-nav">
+  <a href="#telegram">{{ t('settings.telegram_login') }}</a>
+  <a href="#collection">{{ t('settings.collection_config') }}</a>
+  <a href="#ai">{{ t('settings.ai_config') }}</a>
+  <a href="#app">{{ t('settings.app_settings') }}</a>
+  <a href="#database">{{ t('settings.database_info') }}</a>
+</nav>
+
 <div class="cards">
   <div class="card">
     <div class="card-icon {% if telegram_connected %}green{% else %}red{% endif %}">
@@ -55,9 +63,9 @@
   </div>
 </div>
 
-<div class="settings-section">
+<div class="settings-section" id="telegram">
   <div class="settings-section-header">
-    <div class="section-icon" style="background: var(--blue-bg); color: var(--blue);">
+    <div class="section-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
     </div>
     <h3>{{ t('settings.telegram_login') }}</h3>
@@ -81,30 +89,32 @@
             <label>{{ t('settings.two_factor_password') }}</label>
             <input type="password" name="password" placeholder="{{ t('settings.two_factor_password') }}">
           </div>
-          <button type="submit">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-            {{ t('settings.submit_code') if pending_manual_login_phone else t('settings.send_code') }}
-          </button>
+          <div class="form-actions" style="border-top: none; padding-top: 4px;">
+            <button class="btn btn-primary" type="submit">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+              {{ t('settings.submit_code') if pending_manual_login_phone else t('settings.send_code') }}
+            </button>
+          </div>
         </form>
       </div>
       <div>
-        <div style="padding: 16px; background: var(--surface-alt); border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
-          <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 12px;">{{ t('settings.connection_info') }}</div>
-          <div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px;">
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: var(--text-muted);">{{ t('settings.session_path') }}</span>
-              <code style="font-size: 11px; color: var(--text-secondary); word-break: break-all; max-width: 200px; text-align: right;">{{ session_path }}</code>
+        <div class="info-card">
+          <div class="info-card-title">{{ t('settings.connection_info') }}</div>
+          <div class="form-vertical" style="gap: 10px;">
+            <div class="info-row">
+              <span class="info-label">{{ t('settings.session_path') }}</span>
+              <code class="info-value" style="font-size: 11px;">{{ session_path }}</code>
             </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: var(--text-muted);">{{ t('settings.tdata_path') }}</span>
-              <code style="font-size: 11px; color: var(--text-secondary); word-break: break-all; max-width: 200px; text-align: right;">{{ tdata_path }}</code>
+            <div class="info-row">
+              <span class="info-label">{{ t('settings.tdata_path') }}</span>
+              <code class="info-value" style="font-size: 11px;">{{ tdata_path }}</code>
             </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: var(--text-muted);">{{ t('settings.api_id') }}</span>
+            <div class="info-badge-row">
+              <span class="info-label">{{ t('settings.api_id') }}</span>
               <span class="badge {{ 'badge-green' if api_id_present else 'badge-red' }}">{{ t('settings.configured') if api_id_present else t('settings.not_configured') }}</span>
             </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: var(--text-muted);">{{ t('settings.api_hash') }}</span>
+            <div class="info-badge-row">
+              <span class="info-label">{{ t('settings.api_hash') }}</span>
               <span class="badge {{ 'badge-green' if api_hash_present else 'badge-red' }}">{{ t('settings.configured') if api_hash_present else t('settings.not_configured') }}</span>
             </div>
           </div>
@@ -114,9 +124,9 @@
   </div>
 </div>
 
-<div class="settings-section">
+<div class="settings-section" id="collection">
   <div class="settings-section-header">
-    <div class="section-icon" style="background: var(--green-bg); color: var(--green);">
+    <div class="section-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
     </div>
     <h3>{{ t('settings.collection_config') }}</h3>
@@ -140,6 +150,10 @@
           <input type="checkbox" name="fetch_user_about_enabled" value="true" {% if fetch_user_about_enabled %}checked{% endif %}>
           {{ t('settings.fetch_user_about') }}
         </label>
+        <label class="checkbox-label">
+          <input type="checkbox" name="telegram_join_queue_enabled" value="true" {% if telegram_join_queue_enabled %}checked{% endif %}>
+          {{ t('settings.telegram_join_queue') }}
+        </label>
       </div>
 
       <div class="grid-3">
@@ -160,7 +174,7 @@
         </div>
       </div>
 
-      <div class="grid-2">
+      <div class="grid-3">
         <div class="form-group">
           <label>{{ t('settings.ai_summary_batch_size') }}</label>
           <input type="number" name="ai_summary_batch_size" min="20" max="1000" value="{{ ai_summary_batch_size }}">
@@ -170,6 +184,11 @@
           <label>{{ t('settings.ai_timeout') }}</label>
           <input type="number" name="ai_summary_running_timeout_minutes" min="5" max="1440" value="{{ ai_summary_running_timeout_minutes }}">
           <span class="help-text">{{ t('settings.ai_timeout_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.telegram_join_interval') }}</label>
+          <input type="number" name="telegram_join_interval_minutes" min="10" max="1440" value="{{ telegram_join_interval_minutes }}">
+          <span class="help-text">{{ t('settings.telegram_join_interval_desc') }}</span>
         </div>
       </div>
 
@@ -207,17 +226,19 @@
         </div>
       </div>
 
-      <button type="submit">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-        {{ t('settings.save_collection') }}
-      </button>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          {{ t('settings.save_collection') }}
+        </button>
+      </div>
     </form>
   </div>
 </div>
 
-<div class="settings-section">
+<div class="settings-section" id="ai">
   <div class="settings-section-header">
-    <div class="section-icon" style="background: var(--primary-light); color: var(--primary);">
+    <div class="section-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
     </div>
     <h3>{{ t('settings.ai_config') }}</h3>
@@ -261,17 +282,19 @@
         <textarea name="url_classification_prompt" rows="8" style="width: 100%; resize: vertical;">{{ url_classification_prompt }}</textarea>
         <span class="help-text">这里只写业务偏好；系统会强制 JSON 输出格式和字段校验</span>
       </div>
-      <button type="submit">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-        {{ t('settings.save_ai') }}
-      </button>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          {{ t('settings.save_ai') }}
+        </button>
+      </div>
     </form>
   </div>
 </div>
 
-<div class="settings-section">
+<div class="settings-section" id="app">
   <div class="settings-section-header">
-    <div class="section-icon" style="background: var(--amber-bg); color: var(--amber);">
+    <div class="section-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </div>
     <h3>{{ t('settings.app_settings') }}</h3>
@@ -312,34 +335,38 @@
         <input type="text" name="stopwords_extra" value="{{ stopwords_extra }}" placeholder="api,gpt,telegram">
         <span class="help-text">{{ t('settings.stopwords_desc') }}</span>
       </div>
-      <button type="submit">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-        {{ t('settings.save_app') }}
-      </button>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          {{ t('settings.save_app') }}
+        </button>
+      </div>
     </form>
   </div>
 </div>
 
-<div class="settings-section">
+<div class="settings-section" id="database">
   <div class="settings-section-header">
-    <div class="section-icon" style="background: var(--surface-alt); color: var(--text-secondary);">
+    <div class="section-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
     </div>
     <h3>{{ t('settings.database_info') }}</h3>
   </div>
   <div class="settings-section-body">
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;">
-      <div>
-        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.host') }}</div>
-        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_host }}</div>
-      </div>
-      <div>
-        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.port') }}</div>
-        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_port }}</div>
-      </div>
-      <div>
-        <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">{{ t('settings.database') }}</div>
-        <div style="font-size: 13px; color: var(--text-secondary);">{{ database_name }}</div>
+    <div class="info-card">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px;">
+        <div>
+          <div class="info-card-title" style="margin-bottom: 4px;">{{ t('settings.host') }}</div>
+          <div style="font-size: 13px; color: var(--text-secondary);">{{ database_host }}</div>
+        </div>
+        <div>
+          <div class="info-card-title" style="margin-bottom: 4px;">{{ t('settings.port') }}</div>
+          <div style="font-size: 13px; color: var(--text-secondary);">{{ database_port }}</div>
+        </div>
+        <div>
+          <div class="info-card-title" style="margin-bottom: 4px;">{{ t('settings.database') }}</div>
+          <div style="font-size: 13px; color: var(--text-secondary);">{{ database_name }}</div>
+        </div>
       </div>
     </div>
   </div>

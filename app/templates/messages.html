@@ -8,16 +8,16 @@
   </div>
 </div>
 
-<div class="panel">
+<div class="panel" style="padding: 16px;">
   <form method="get" class="filters">
-    <select name="chat_id" style="min-width: 160px;">
+    <select name="chat_id" style="min-width: 180px;">
       <option value="">{{ t('messages.chat_filter') }}</option>
       {% for chat in chats %}
       <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
       {% endfor %}
     </select>
-    <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('messages.search_placeholder') }}" style="min-width: 200px;">
-    <input type="text" name="sender" value="{{ sender }}" placeholder="{{ t('messages.sender_placeholder') }}" style="min-width: 120px;">
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('messages.search_placeholder') }}" style="min-width: 220px;">
+    <input type="text" name="sender" value="{{ sender }}" placeholder="{{ t('messages.sender_placeholder') }}" style="min-width: 140px;">
     <label class="checkbox-label" style="margin: 0;">
       <input type="checkbox" name="media_only" value="true" {% if media_only %}checked{% endif %}>
       {{ t('messages.with_media') }}
@@ -35,7 +35,7 @@
   </form>
 </div>
 
-<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px;">
   <div style="font-size: 13px; color: var(--text-secondary);">
     {{ t('common.total_messages', count=total_count) }}
     {% if selected_chat_id or keyword or media_only or sender %}{{ t('common.filtered') }}{% endif %}
@@ -67,7 +67,11 @@
     </div>
     <div class="msg-content">
       <div class="msg-header">
+        {% if row.sender_user_id %}
+        <a href="/user-profile/{{ row.sender_user_id }}" class="msg-sender" style="text-decoration: none; color: var(--primary);">{{ row.sender_name }}</a>
+        {% else %}
         <span class="msg-sender">{{ row.sender_name }}</span>
+        {% endif %}
         <span class="msg-chat">{{ row.chat_title }}</span>
         <span class="msg-time">{{ row.message.message_date | to_beijing('%m-%d %H:%M') }}</span>
       </div>

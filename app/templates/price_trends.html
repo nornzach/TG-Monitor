@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}{{ t('price_trends.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('price_trends.title') }}</h2>
+    <div class="page-desc">{{ t('price_trends.desc') }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" class="filters" style="gap: 12px; flex-wrap: wrap;">
+    <select name="chat_id" style="min-width: 200px;">
+      <option value="">{{ t('price_trends.all_chats') }}</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <select name="days" style="min-width: 120px;">
+      <option value="7" {% if days == 7 %}selected{% endif %}>7 {{ t('common.days') }}</option>
+      <option value="14" {% if days == 14 %}selected{% endif %}>14 {{ t('common.days') }}</option>
+      <option value="30" {% if days == 30 %}selected{% endif %}>30 {{ t('common.days') }}</option>
+    </select>
+    <button class="btn btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_chat_id %}
+    <a class="btn btn-secondary" href="/price-trends">{{ t('common.clear') }}</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if trends %}
+{% set valid_prices = trends|map(attribute='current_price')|reject('none')|list %}
+<div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+  <div class="card">
+    <div class="card-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+    <div class="label">{{ t('price_trends.product_name') }}</div>
+    <div class="value">{{ trends|length }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></div>
+    <div class="label">{{ t('price_trends.avg_price') }}</div>
+    <div class="value">{{ "%.0f"|format(valid_prices|sum / valid_prices|length) if valid_prices else '-' }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg></div>
+    <div class="label">{{ t('price_trends.price_change') }}</div>
+    <div class="value">{{ trends|selectattr('price_change', '!=', 0)|list|length }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>{{ t('price_trends.price_history') }}</h3>
+  <div class="chart-container" style="height: 300px; margin-top: 12px;">
+    <canvas id="priceOverviewChart"></canvas>
+  </div>
+</div>
+
+{% if seller_comparison %}
+<div class="panel">
+  <h3>{{ t('price_trends.sellers') }}</h3>
+  <div class="chart-container" style="height: 300px; margin-top: 12px;">
+    <canvas id="sellerComparisonChart"></canvas>
+  </div>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h3>{{ t('price_trends.title') }}</h3>
+  <div class="table-responsive" style="margin-top: 12px;">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('price_trends.product_name') }}</th>
+          <th>{{ t('price_trends.current_price') }}</th>
+          <th>{{ t('price_trends.price_change') }}</th>
+          <th style="min-width: 180px;">{{ t('price_trends.price_history') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in trends %}
+        <tr>
+          <td>
+            <strong>{{ item.product_name }}</strong>
+            {% if item.seller %}<div style="font-size: 12px; color: var(--text-secondary);">{{ item.seller }}</div>{% endif %}
+          </td>
+          <td>
+            {% if item.current_price is not none %}
+            <span style="font-weight: 600;">{{ item.current_price }}</span> <span style="font-size: 12px; color: var(--text-secondary);">{{ item.currency }}</span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            {% if item.price_change != 0 %}
+            <span class="badge {% if item.price_change > 0 %}badge-red{% else %}badge-green{% endif %}">
+              {{ "%.2f"|format(item.price_change) }} ({{ "%.1f"|format(item.price_change_pct) }}%)
+            </span>
+            {% else %}
+            <span class="badge">-</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if item.history|length > 1 %}
+            <canvas id="priceSpark{{ loop.index }}" height="40" width="160"></canvas>
+            <script>
+              (function() {
+                var canvas = document.getElementById('priceSpark{{ loop.index }}');
+                if (!canvas) return;
+                var ctx = canvas.getContext('2d');
+                var data = {{ item.history|map(attribute='price')|list|tojson }};
+                var valid = data.filter(function(v){return v !== null && !isNaN(v);});
+                if (valid.length < 2) return;
+                var min = Math.min.apply(null, valid);
+                var max = Math.max.apply(null, valid);
+                var range = max - min || 1;
+                var up = valid[valid.length-1] >= valid[0];
+                var width = canvas.width, height = canvas.height;
+                ctx.strokeStyle = up ? '#ef4444' : '#22c55e';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                data.forEach(function(v, i) {
+                  if (v === null || isNaN(v)) return;
+                  var x = (i / (data.length - 1)) * (width - 4) + 2;
+                  var y = height - 6 - ((v - min) / range) * (height - 12);
+                  if (i === 0 || (data[i-1] === null || isNaN(data[i-1]))) ctx.moveTo(x, y);
+                  else ctx.lineTo(x, y);
+                });
+                ctx.stroke();
+                var last = valid[valid.length-1];
+                var ly = height - 6 - ((last - min) / range) * (height - 12);
+                ctx.fillStyle = up ? '#ef4444' : '#22c55e';
+                ctx.beginPath();
+                ctx.arc(width - 3, ly, 3, 0, Math.PI * 2);
+                ctx.fill();
+              })();
+            </script>
+            {% else %}
+            <span style="font-size: 12px; color: var(--text-muted);">-</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if seller_comparison %}
+<div class="panel">
+  <h3>{{ t('price_trends.seller_count') }} {{ t('price_trends.sellers') }}</h3>
+  <div class="table-responsive" style="margin-top: 12px;">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('price_trends.product_name') }}</th>
+          <th>{{ t('price_trends.seller_count') }}</th>
+          <th>{{ t('price_trends.min_price') }}</th>
+          <th>{{ t('price_trends.max_price') }}</th>
+          <th>{{ t('price_trends.avg_price') }}</th>
+          <th>{{ t('price_trends.sellers') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in seller_comparison %}
+        <tr>
+          <td><strong>{{ item.product_name }}</strong></td>
+          <td><span class="badge badge-blue">{{ item.seller_count }}</span></td>
+          <td>{{ item.min_price }}</td>
+          <td>{{ item.max_price }}</td>
+          <td>{{ "%.2f"|format(item.avg_price) }}</td>
+          <td style="max-width: 400px;">
+            {% for s in item.sellers %}
+            <span class="badge" style="margin: 2px;">{{ s.price }} ({{ s.seller or '?' }})</span>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">📈</div>
+    <div class="empty-title">{{ t('price_trends.no_data') }}</div>
+    <div class="empty-desc">{{ t('price_trends.no_data_desc') }}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  function chartFontColor() { return getComputedStyle(document.body).getPropertyValue('--text-secondary').trim(); }
+  function chartGridColor() { return getComputedStyle(document.body).getPropertyValue('--border').trim(); }
+  function makeOptions(title) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: chartFontColor() } }, title: { display: false } },
+      scales: {
+        x: { ticks: { color: chartFontColor() }, grid: { color: chartGridColor() } },
+        y: { ticks: { color: chartFontColor() }, grid: { color: chartGridColor() } }
+      }
+    };
+  }
+
+  var trends = {{ trends|tojson }};
+  if (trends && trends.length) {
+    // Aggregate average price per day across all products
+    var dayMap = {};
+    trends.forEach(function(item) {
+      item.history.forEach(function(h) {
+        if (!h.recorded_at || h.price === null || isNaN(h.price)) return;
+        var d = h.recorded_at.slice(0, 10);
+        if (!dayMap[d]) dayMap[d] = { sum: 0, count: 0 };
+        dayMap[d].sum += h.price;
+        dayMap[d].count += 1;
+      });
+    });
+    var labels = Object.keys(dayMap).sort();
+    var avgData = labels.map(function(d) { return dayMap[d].sum / dayMap[d].count; });
+    var ctx = document.getElementById('priceOverviewChart');
+    if (ctx) {
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '平均价格趋势',
+            data: avgData,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59,130,246,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3
+          }]
+        },
+        options: makeOptions()
+      });
+    }
+  }
+
+  var sellerComparison = {{ seller_comparison|tojson }};
+  if (sellerComparison && sellerComparison.length) {
+    var top = sellerComparison.slice(0, 15);
+    var ctx2 = document.getElementById('sellerComparisonChart');
+    if (ctx2) {
+      new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: top.map(function(i) { return i.product_name; }),
+          datasets: [
+            { label: '最低价', data: top.map(function(i) { return i.min_price; }), backgroundColor: '#10b981' },
+            { label: '平均价', data: top.map(function(i) { return i.avg_price; }), backgroundColor: '#3b82f6' },
+            { label: '最高价', data: top.map(function(i) { return i.max_price; }), backgroundColor: '#ef4444' }
+          ]
+        },
+        options: makeOptions()
+      });
+    }
+  }
+})();
+</script>
+{% endblock %}

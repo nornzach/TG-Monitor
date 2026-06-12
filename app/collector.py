@@ -9,14 +9,25 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from telethon import events, utils
+from telethon.errors import RPCError
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import CheckChatInviteRequest, ImportChatInviteRequest
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import User, Channel, Chat
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
+from . import analysis_advanced
 from .ai_service import extract_urls_from_text, run_key_lead_analysis_once, run_summary_for_chat, run_url_classification_once, upsert_discovered_urls
 from .alerts import check_message_alerts
+from .content_fingerprint import save_fingerprint
 from .db import session_scope
-from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary
+from .join_targets import discover_join_targets_from_collected_data, normalize_join_target, sync_join_targets_with_monitored_chats
+from .market_brief import generate_daily_brief
+from .models import (
+    MonitoredChat, TelegramJoinTarget, TelegramUser, Message, MessageKeyword,
+    SyncRun, AppSetting, AiSummary, MessageEdit, MessageReaction,
+    MessageViewsHistory, UserDailyStat, DailyChatStat,
+)
 from .telegram_client import telegram_session_manager
 from .text_utils import normalize_text, extract_keywords
 from .config import settings
@@ -35,6 +46,7 @@ class TelegramCollector:
         self._backfill_locks: dict[int, asyncio.Lock] = {}
         self._persist_locks: dict[int, asyncio.Lock] = {}
         self._summary_locks: dict[int, asyncio.Lock] = {}
+        self._join_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self.started:
@@ -78,6 +90,46 @@ class TelegramCollector:
                 max_instances=1,
                 coalesce=True,
             )
+
+        if settings.telegram_join_queue_enabled:
+            self.scheduler.add_job(
+                self.run_join_queue_once,
+                'interval',
+                minutes=settings.telegram_join_interval_minutes,
+                id='telegram_join_queue',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+
+        # Advanced analytics jobs
+        self.scheduler.add_job(
+            self.run_daily_analytics,
+            'interval',
+            hours=1,
+            id='daily_analytics',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        self.scheduler.add_job(
+            self.run_anomaly_detection,
+            'interval',
+            hours=1,
+            id='anomaly_detection',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        self.scheduler.add_job(
+            self.run_daily_brief,
+            'cron',
+            hour=1,
+            minute=30,
+            id='daily_brief',
+            replace_existing=True,
+            max_instances=1,
+        )
 
         if self.scheduler.get_jobs():
             self.scheduler.start()
@@ -222,8 +274,233 @@ class TelegramCollector:
                 except Exception:
                     pass
 
+        if settings.telegram_join_queue_enabled:
+            self.scheduler.add_job(
+                self.run_join_queue_once,
+                'interval',
+                minutes=settings.telegram_join_interval_minutes,
+                id='telegram_join_queue',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+        else:
+            if self.scheduler.running:
+                try:
+                    self.scheduler.remove_job('telegram_join_queue')
+                except Exception:
+                    pass
+
         if not self.scheduler.running and self.scheduler.get_jobs():
             self.scheduler.start()
+
+    async def run_daily_analytics(self) -> dict:
+        """Compute daily chat/user stats."""
+        try:
+            with session_scope() as db:
+                chat_count = analysis_advanced.compute_daily_chat_stats(db)
+                user_count = analysis_advanced.compute_user_daily_aggregates(db)
+            logger.info('daily analytics computed chat_stats=%s user_stats=%s', chat_count, user_count)
+            return {'status': 'success', 'chat_stats': chat_count, 'user_stats': user_count}
+        except Exception as exc:
+            logger.exception('daily analytics failed')
+            return {'status': 'failed', 'reason': str(exc)}
+
+    async def run_anomaly_detection(self) -> dict:
+        """Detect chat anomalies and persist system events."""
+        try:
+            with session_scope() as db:
+                events = analysis_advanced.detect_chat_anomalies(db)
+            logger.info('anomaly detection found %s events', len(events))
+            return {'status': 'success', 'events': len(events)}
+        except Exception as exc:
+            logger.exception('anomaly detection failed')
+            return {'status': 'failed', 'reason': str(exc)}
+
+    async def run_daily_brief(self) -> dict:
+        """Generate daily cross-chat market brief."""
+        try:
+            result = await generate_daily_brief()
+            return result
+        except Exception as exc:
+            logger.exception('daily brief failed')
+            return {'status': 'failed', 'reason': str(exc)}
+
+    async def run_join_queue_once(self) -> dict:
+        if not settings.telegram_join_queue_enabled:
+            return {'status': 'disabled'}
+        if self._join_lock.locked():
+            return {'status': 'busy'}
+        async with self._join_lock:
+            discover_result = {'inserted': 0, 'existing': 0, 'invalid': [], 'scanned': 0}
+            try:
+                discover_result = discover_join_targets_from_collected_data()
+            except Exception as exc:
+                logger.warning('auto-discover join targets failed: %s', exc)
+            try:
+                await self.sync_dialogs()
+                sync_join_targets_with_monitored_chats()
+            except Exception as exc:
+                logger.warning('pre-join dialog sync failed: %s', exc)
+
+            now = datetime.utcnow()
+            with session_scope() as db:
+                target = db.execute(
+                    select(TelegramJoinTarget)
+                    .where(
+                        TelegramJoinTarget.status == 'pending',
+                        or_(
+                            TelegramJoinTarget.next_attempt_at.is_(None),
+                            TelegramJoinTarget.next_attempt_at <= now,
+                        ),
+                    )
+                    .order_by(TelegramJoinTarget.created_at.asc(), TelegramJoinTarget.id.asc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                target_id = target.id if target else None
+            if not target_id:
+                return {'status': 'empty', 'discovered': discover_result}
+            result = await self._join_one_target(target_id)
+            result['discovered'] = discover_result
+            return result
+
+    async def _join_one_target(self, target_id: int) -> dict:
+        now = datetime.utcnow()
+        with session_scope() as db:
+            target = db.get(TelegramJoinTarget, target_id)
+            if not target or target.status != 'pending':
+                return {'status': 'skipped', 'target_id': target_id}
+            try:
+                normalized_key, target_type, payload = normalize_join_target(target.source)
+            except ValueError as exc:
+                target.status = 'failed'
+                target.last_error = str(exc)
+                target.last_attempt_at = now
+                return {'status': 'failed', 'target_id': target_id, 'reason': str(exc)}
+            target.normalized_key = normalized_key
+            target.target_type = target_type
+            target.attempt_count = (target.attempt_count or 0) + 1
+            target.last_attempt_at = now
+            target.last_error = None
+
+        client = await telegram_session_manager.connect()
+        if not client:
+            self._mark_join_target(target_id, 'failed', 'telegram session unavailable')
+            return {'status': 'failed', 'target_id': target_id, 'reason': 'telegram session unavailable'}
+
+        try:
+            entity = None
+            if target_type == 'invite':
+                try:
+                    checked = await client(CheckChatInviteRequest(payload))
+                    entity = getattr(checked, 'chat', None)
+                except Exception:
+                    entity = None
+                if entity is None:
+                    result = await client(ImportChatInviteRequest(payload))
+                    entity = self._extract_chat_from_result(result)
+            else:
+                entity = await client.get_entity(payload)
+                await client(JoinChannelRequest(entity))
+
+            if not isinstance(entity, (Channel, Chat)):
+                raise RuntimeError('joined but Telegram did not return a chat entity')
+            chat = self._activate_joined_chat(entity)
+            self._mark_join_target(
+                target_id,
+                'joined',
+                None,
+                entity=entity,
+                monitored_chat_id=chat.id,
+            )
+            if settings.telegram_live_listener_enabled and not self.handler_registered:
+                await self._register_handler(client)
+            try:
+                await self._backfill_one(chat.telegram_id)
+            except Exception as sync_exc:
+                self._mark_join_target(
+                    target_id,
+                    'joined',
+                    f'joined, but initial sync failed: {sync_exc}',
+                    entity=entity,
+                    monitored_chat_id=chat.id,
+                )
+                logger.warning('initial sync after join failed target=%s chat=%s: %s', target_id, chat.telegram_id, sync_exc)
+            return {'status': 'joined', 'target_id': target_id, 'chat_id': chat.id}
+        except Exception as exc:
+            return await self._handle_join_error(target_id, exc)
+
+    def _extract_chat_from_result(self, result):
+        for item in getattr(result, 'chats', []) or []:
+            if isinstance(item, (Channel, Chat)):
+                return item
+        return None
+
+    def _activate_joined_chat(self, entity) -> MonitoredChat:
+        peer_id = utils.get_peer_id(entity)
+        with session_scope() as db:
+            chat = db.execute(select(MonitoredChat).where(MonitoredChat.telegram_id == peer_id)).scalar_one_or_none()
+            if not chat:
+                chat = MonitoredChat(
+                    telegram_id=peer_id,
+                    access_hash=getattr(entity, 'access_hash', None),
+                    title=getattr(entity, 'title', getattr(entity, 'username', str(getattr(entity, 'id', peer_id)))),
+                    username=getattr(entity, 'username', None),
+                    chat_type=entity.__class__.__name__.lower(),
+                    is_active=True,
+                )
+                db.add(chat)
+                db.flush()
+            else:
+                chat.title = getattr(entity, 'title', getattr(entity, 'username', chat.title))
+                chat.username = getattr(entity, 'username', chat.username)
+                chat.access_hash = getattr(entity, 'access_hash', chat.access_hash)
+                chat.chat_type = entity.__class__.__name__.lower()
+                chat.is_active = True
+            db.expunge(chat)
+            return chat
+
+    def _mark_join_target(self, target_id: int, status: str, error: str | None, entity=None, monitored_chat_id: int | None = None, next_attempt_at: datetime | None = None) -> None:
+        now = datetime.utcnow()
+        with session_scope() as db:
+            target = db.get(TelegramJoinTarget, target_id)
+            if not target:
+                return
+            target.status = status
+            target.last_error = error
+            target.next_attempt_at = next_attempt_at
+            if entity is not None:
+                target.title = getattr(entity, 'title', getattr(entity, 'username', target.title))
+                target.resolved_telegram_id = utils.get_peer_id(entity)
+            if monitored_chat_id:
+                target.monitored_chat_id = monitored_chat_id
+            if status in {'joined', 'already_joined'}:
+                target.joined_at = target.joined_at or now
+
+    async def _handle_join_error(self, target_id: int, exc: Exception) -> dict:
+        name = exc.__class__.__name__
+        message = str(exc) or name
+        if name == 'FloodWaitError':
+            seconds = int(getattr(exc, 'seconds', settings.telegram_join_interval_minutes * 60))
+            next_attempt_at = datetime.utcnow() + timedelta(seconds=seconds)
+            self._mark_join_target(target_id, 'pending', f'FloodWait: retry after {seconds}s', next_attempt_at=next_attempt_at)
+            return {'status': 'pending', 'target_id': target_id, 'reason': f'flood wait {seconds}s'}
+        if name == 'InviteRequestSentError':
+            self._mark_join_target(target_id, 'need_approval', 'join request sent; waiting for admin approval')
+            return {'status': 'need_approval', 'target_id': target_id}
+        if name == 'UserAlreadyParticipantError':
+            try:
+                await self.sync_dialogs()
+                sync_join_targets_with_monitored_chats()
+            except Exception:
+                pass
+            self._mark_join_target(target_id, 'already_joined', None)
+            return {'status': 'already_joined', 'target_id': target_id}
+        if isinstance(exc, RPCError) or name.endswith('Error'):
+            self._mark_join_target(target_id, 'failed', message[:1000])
+            return {'status': 'failed', 'target_id': target_id, 'reason': message}
+        self._mark_join_target(target_id, 'failed', message[:1000])
+        return {'status': 'failed', 'target_id': target_id, 'reason': message}
 
     async def sync_dialogs(self) -> int:
         client = await telegram_session_manager.connect()
@@ -390,6 +667,138 @@ class TelegramCollector:
             'media_is_video': suffix in {'.mp4', '.mov', '.m4v', '.webm'},
         }
 
+    def _record_reactions(self, db, message_id: int, tg_message) -> None:
+        """Persist message reactions if available."""
+        try:
+            reactions = getattr(tg_message, 'reactions', None)
+            if not reactions:
+                return
+            results = getattr(reactions, 'results', [])
+            if not results:
+                return
+            for r in results:
+                emoticon = None
+                count = getattr(r, 'count', 0)
+                reaction = getattr(r, 'reaction', None)
+                if reaction:
+                    emoticon = getattr(reaction, 'emoticon', None)
+                if not emoticon:
+                    emoticon = 'like'
+                existing = db.execute(
+                    select(MessageReaction).where(
+                        MessageReaction.message_id == message_id,
+                        MessageReaction.reaction_type == emoticon,
+                    )
+                ).scalar_one_or_none()
+                if existing:
+                    existing.count = count
+                else:
+                    db.add(MessageReaction(message_id=message_id, reaction_type=emoticon, count=count))
+        except Exception as exc:
+            logger.warning('record reactions failed msg=%s: %s', message_id, exc)
+
+    def _record_views_history(self, db, message_id: int, tg_message) -> None:
+        """Record views/forwards history for channel posts."""
+        try:
+            views = getattr(tg_message, 'views', None)
+            forwards = getattr(tg_message, 'forwards', None)
+            if views is None and forwards is None:
+                return
+            # Only record if changed significantly or not recorded recently
+            last = db.execute(
+                select(MessageViewsHistory)
+                .where(MessageViewsHistory.message_id == message_id)
+                .order_by(MessageViewsHistory.recorded_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if last and last.views == views and last.forwards == forwards:
+                return
+            db.add(MessageViewsHistory(message_id=message_id, views=views or 0, forwards=forwards))
+        except Exception as exc:
+            logger.warning('record views history failed msg=%s: %s', message_id, exc)
+
+    def _record_edit_history(self, db, message: Message, old_text: str | None, new_text: str | None) -> None:
+        """Store edit history when message text changes."""
+        if old_text == new_text:
+            return
+        if not old_text and not new_text:
+            return
+        db.add(MessageEdit(message_id=message.id, old_text=old_text, new_text=new_text))
+
+    def _update_user_daily_stats(self, db, user_id: int, msg: Message) -> None:
+        """Increment daily stats for a user."""
+        try:
+            from datetime import date
+            today = msg.message_date.date() if msg.message_date else date.today()
+            stat = db.execute(
+                select(UserDailyStat).where(
+                    UserDailyStat.user_id == user_id,
+                    func.date(UserDailyStat.date) == today,
+                )
+            ).scalar_one_or_none()
+            text = msg.normalized_text or msg.raw_text or ''
+            word_count = len(text.split())
+            if stat:
+                stat.message_count = (stat.message_count or 0) + 1
+                stat.word_count = (stat.word_count or 0) + word_count
+                if msg.has_media:
+                    stat.media_count = (stat.media_count or 0) + 1
+                # Update active hours
+                hours = dict(stat.active_hours_json or {})
+                hour = msg.message_date.hour if msg.message_date else 0
+                hours[str(hour)] = hours.get(str(hour), 0) + 1
+                stat.active_hours_json = hours
+            else:
+                hour = msg.message_date.hour if msg.message_date else 0
+                db.add(UserDailyStat(
+                    user_id=user_id,
+                    date=datetime.combine(today, datetime.min.time()),
+                    message_count=1,
+                    word_count=word_count,
+                    media_count=1 if msg.has_media else 0,
+                    active_hours_json={str(hour): 1},
+                ))
+        except Exception as exc:
+            logger.warning('update user daily stats failed user=%s: %s', user_id, exc)
+
+    def _update_chat_daily_stats(self, db, chat_id: int, msg: Message, is_new_user: bool) -> None:
+        """Increment daily stats for a chat."""
+        try:
+            from datetime import date
+            today = msg.message_date.date() if msg.message_date else date.today()
+            stat = db.execute(
+                select(DailyChatStat).where(
+                    DailyChatStat.chat_id == chat_id,
+                    func.date(DailyChatStat.date) == today,
+                )
+            ).scalar_one_or_none()
+            text = msg.normalized_text or msg.raw_text or ''
+            msg_len = len(text)
+            url_count = len(extract_urls_from_text(text))
+            if stat:
+                old_avg = stat.avg_message_length or 0
+                old_count = stat.message_count or 0
+                stat.message_count = old_count + 1
+                stat.avg_message_length = (old_avg * old_count + msg_len) / (old_count + 1)
+                if msg.has_media:
+                    stat.media_count = (stat.media_count or 0) + 1
+                stat.url_count = (stat.url_count or 0) + url_count
+                if is_new_user:
+                    stat.new_user_count = (stat.new_user_count or 0) + 1
+            else:
+                db.add(DailyChatStat(
+                    chat_id=chat_id,
+                    date=datetime.combine(today, datetime.min.time()),
+                    message_count=1,
+                    unique_senders=1,
+                    media_count=1 if msg.has_media else 0,
+                    url_count=url_count,
+                    new_user_count=1 if is_new_user else 0,
+                    avg_message_length=float(msg_len),
+                ))
+        except Exception as exc:
+            logger.warning('update chat daily stats failed chat=%s: %s', chat_id, exc)
+
     async def persist_message(self, tg_message, tg_chat, tg_sender, client=None, trigger_ai: bool = True) -> None:
         if tg_chat is not None:
             chat_telegram_id = utils.get_peer_id(tg_chat)
@@ -487,6 +896,7 @@ class TelegramCollector:
                     db.add(existing)
                     db.flush()
                 else:
+                    old_text = existing.raw_text
                     existing.sender_user_id = sender.id if sender else existing.sender_user_id
                     existing.raw_text = getattr(tg_message, 'message', '') or getattr(tg_message, 'text', '')
                     existing.normalized_text = normalized
@@ -496,6 +906,8 @@ class TelegramCollector:
                     existing.has_media = getattr(tg_message, 'media', None) is not None
                     existing.media_type = tg_message.media.__class__.__name__ if getattr(tg_message, 'media', None) is not None else None
                     existing.meta_json = meta_json
+                    if old_text != existing.raw_text:
+                        self._record_edit_history(db, existing, old_text, existing.raw_text)
                     for kw in list(existing.keywords):
                         db.delete(kw)
                     db.flush()
@@ -507,6 +919,30 @@ class TelegramCollector:
                 chat.access_hash = getattr(tg_chat, 'access_hash', chat.access_hash)
                 for keyword, weight in keywords_data:
                     db.add(MessageKeyword(message_id=existing.id, keyword=keyword[:100], weight=weight))
+
+                # Record reactions & views history
+                self._record_reactions(db, existing.id, tg_message)
+                self._record_views_history(db, existing.id, tg_message)
+
+                # Daily stats & fingerprint
+                if is_new_message:
+                    if existing.sender_user_id:
+                        self._update_user_daily_stats(db, existing.sender_user_id, existing)
+                    is_new_user_today = db.execute(
+                        select(func.count(Message.id)).where(
+                            Message.chat_id == chat.id,
+                            Message.sender_user_id == existing.sender_user_id,
+                            Message.id != existing.id,
+                            func.date(Message.message_date) == func.date(existing.message_date),
+                        )
+                    ).scalar() == 0
+                    self._update_chat_daily_stats(db, chat.id, existing, is_new_user_today)
+
+                # Content fingerprint for deduplication
+                try:
+                    save_fingerprint(db, existing.id, existing.normalized_text or existing.raw_text or '')
+                except Exception as exc:
+                    logger.warning('fingerprint failed msg=%s: %s', existing.id, exc)
 
                 # Check alert rules for new messages only
                 if is_new_message:
@@ -552,14 +988,27 @@ class TelegramCollector:
                         return
                 last = db.query(AiSummary).filter(
                     AiSummary.chat_id == chat_id,
+                ).order_by(AiSummary.id.desc()).first()
+                # Enforce minimum trigger interval
+                if last and last.triggered_at:
+                    interval = timedelta(minutes=settings.ai_summary_min_trigger_interval_minutes)
+                    if datetime.utcnow() - last.triggered_at < interval:
+                        return
+                last_success = db.query(AiSummary).filter(
+                    AiSummary.chat_id == chat_id,
                     AiSummary.status == 'success',
                 ).order_by(AiSummary.id.desc()).first()
-                last_msg_id = last.end_message_id if last else 0
+                last_msg_id = last_success.end_message_id if last_success else 0
                 new_count = db.query(func.count(Message.id)).filter(
                     Message.chat_id == chat_id,
                     Message.id > last_msg_id,
                 ).scalar() or 0
-            if new_count >= settings.ai_summary_batch_size:
+
+            if settings.ai_summary_slide_window_enabled:
+                min_required = min(settings.ai_summary_min_batch_size, settings.ai_summary_slide_window_size)
+            else:
+                min_required = settings.ai_summary_batch_size
+            if new_count >= min_required:
                 asyncio.create_task(run_summary_for_chat(chat_id))
 
 

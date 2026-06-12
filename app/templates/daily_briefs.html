@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}{{ t('daily_briefs.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('daily_briefs.title') }}</h2>
+    <div class="page-desc">{{ t('daily_briefs.desc') }}</div>
+  </div>
+  <div class="page-actions">
+    <form action="/daily-briefs/generate" method="post" style="display: inline;">
+      <button class="btn btn-primary" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg>
+        {{ t('daily_briefs.generate_now') }}
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if latest %}
+<div class="panel" style="border-top: 4px solid var(--primary);">
+  <div style="padding: 20px 24px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;">
+      <div>
+        <h3 style="margin-bottom: 4px;">{{ latest.title }}</h3>
+        <div style="font-size: 13px; color: var(--text-secondary);">{{ latest.brief_date | to_beijing('%Y-%m-%d') }}</div>
+      </div>
+      <span class="badge {% if latest.risk_level == 'high' %}badge-red{% elif latest.risk_level == 'medium' %}badge-amber{% else %}badge-green{% endif %}" style="font-size: 13px; padding: 6px 12px;">
+        {{ t('daily_briefs.risk_level') }}: {{ t('common.' ~ latest.risk_level) }}
+      </span>
+    </div>
+
+    <div class="summary-body" style="font-size: 14px; line-height: 1.8; white-space: pre-line;">{{ latest.content }}</div>
+
+    {% set hot_topics = latest.hot_topics_json if latest.hot_topics_json is sequence and latest.hot_topics_json is not string else [] %}
+    {% set signals = latest.signals_json if latest.signals_json is sequence and latest.signals_json is not string else [] %}
+    {% set price_moves = latest.price_moves_json if latest.price_moves_json is sequence and latest.price_moves_json is not string else [] %}
+
+    {% if hot_topics or signals or price_moves %}
+    <div style="margin-top: 20px;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text-secondary); margin-bottom: 12px;">{{ t('daily_briefs.chart_signals') }}</div>
+      <div class="grid-3">
+        <div class="panel" style="padding: 12px;">
+          <div class="chart-container" style="height: 220px;">
+            <canvas id="signalsChart"></canvas>
+          </div>
+        </div>
+        <div class="panel" style="padding: 12px;">
+          <div class="chart-container" style="height: 220px;">
+            <canvas id="priceMovesChart"></canvas>
+          </div>
+        </div>
+        <div class="panel" style="padding: 12px;">
+          <div class="chart-container" style="height: 220px;">
+            <canvas id="topicsChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if hot_topics %}
+    <div style="margin-top: 20px;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text-secondary); margin-bottom: 8px;">{{ t('daily_briefs.hot_topics') }}</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+        {% for topic in hot_topics %}
+        <span class="badge badge-blue">{{ topic }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if signals %}
+    <div style="margin-top: 20px;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text-secondary); margin-bottom: 8px;">{{ t('daily_briefs.signals') }}</div>
+      <div class="intel-grid">
+        {% for signal in signals %}
+        <div style="background: var(--surface-alt); border-radius: 8px; padding: 10px 12px; font-size: 13px; border: 1px solid var(--border-light);">
+          <span class="badge {% if signal.severity == 'high' %}badge-red{% elif signal.severity == 'medium' %}badge-amber{% else %}badge-green{% endif %}" style="margin-bottom: 6px;">{{ signal.type }}</span>
+          <div>{{ signal.content }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if price_moves %}
+    <div style="margin-top: 20px;">
+      <div style="font-size: 13px; font-weight: 700; color: var(--text-secondary); margin-bottom: 8px;">{{ t('daily_briefs.price_moves') }}</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+        {% for move in price_moves %}
+        <span class="badge {% if move.direction == 'up' %}badge-red{% elif move.direction == 'down' %}badge-green{% else %}badge-amber{% endif %}">
+          {{ move.product_name }}: {{ move.note }}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">📰</div>
+    <div class="empty-title">{{ t('daily_briefs.no_brief') }}</div>
+    <div class="empty-desc">{{ t('daily_briefs.no_brief_desc') }}</div>
+    <form action="/daily-briefs/generate" method="post" style="margin-top: 16px;">
+      <button class="btn btn-primary" type="submit">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10"/></svg>
+        {{ t('daily_briefs.generate_now') }}
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if briefs %}
+<div class="panel">
+  <h3>{{ t('daily_briefs.history') }}</h3>
+  <div class="chart-container" style="height: 220px; margin: 12px 0 20px;">
+    <canvas id="historyRiskChart"></canvas>
+  </div>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>{{ t('common.time') }}</th>
+          <th>{{ t('daily_briefs.title') }}</th>
+          <th>{{ t('daily_briefs.risk_level') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for brief in briefs %}
+        <tr>
+          <td>{{ brief.brief_date | to_beijing('%Y-%m-%d') }}</td>
+          <td><a href="/daily-briefs?date={{ brief.brief_date | to_beijing('%Y-%m-%d') }}" style="color: var(--primary);">{{ brief.title }}</a></td>
+          <td>
+            <span class="badge {% if brief.risk_level == 'high' %}badge-red{% elif brief.risk_level == 'medium' %}badge-amber{% else %}badge-green{% endif %}">
+              {{ t('common.' ~ brief.risk_level) }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  function chartFontColor() { return getComputedStyle(document.body).getPropertyValue('--text-secondary').trim(); }
+  function chartGridColor() { return getComputedStyle(document.body).getPropertyValue('--border').trim(); }
+  function makeOptions() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: chartFontColor() } }, title: { display: false } },
+      scales: {
+        x: { ticks: { color: chartFontColor() }, grid: { color: chartGridColor() } },
+        y: { ticks: { color: chartFontColor() }, grid: { color: chartGridColor() } }
+      }
+    };
+  }
+  function makePieOptions() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { color: chartFontColor(), boxWidth: 12 } } }
+    };
+  }
+
+  var latest = {{ latest_payload|tojson }};
+  if (latest && latest.signals_json) {
+    var severityMap = {};
+    var typeMap = {};
+    latest.signals_json.forEach(function(s) {
+      severityMap[s.severity || 'low'] = (severityMap[s.severity || 'low'] || 0) + 1;
+      typeMap[s.type || 'other'] = (typeMap[s.type || 'other'] || 0) + 1;
+    });
+    var ctx = document.getElementById('signalsChart');
+    if (ctx) {
+      new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: Object.keys(severityMap),
+          datasets: [{
+            data: Object.values(severityMap),
+            backgroundColor: ['#ef4444', '#f59e0b', '#10b981']
+          }]
+        },
+        options: makePieOptions()
+      });
+    }
+  }
+  if (latest && latest.price_moves_json) {
+    var dirMap = { up: 0, down: 0, stable: 0 };
+    latest.price_moves_json.forEach(function(m) { dirMap[m.direction || 'stable'] = (dirMap[m.direction || 'stable'] || 0) + 1; });
+    var ctx2 = document.getElementById('priceMovesChart');
+    if (ctx2) {
+      new Chart(ctx2, {
+        type: 'pie',
+        data: {
+          labels: ['上涨', '下跌', '持平'],
+          datasets: [{
+            data: [dirMap.up, dirMap.down, dirMap.stable],
+            backgroundColor: ['#ef4444', '#10b981', '#94a3b8']
+          }]
+        },
+        options: makePieOptions()
+      });
+    }
+  }
+  if (latest && latest.hot_topics_json) {
+    var ctx3 = document.getElementById('topicsChart');
+    if (ctx3) {
+      new Chart(ctx3, {
+        type: 'bar',
+        data: {
+          labels: latest.hot_topics_json,
+          datasets: [{
+            label: '话题',
+            data: latest.hot_topics_json.map(function() { return 1; }),
+            backgroundColor: '#3b82f6'
+          }]
+        },
+        options: makeOptions()
+      });
+    }
+  }
+
+  var briefs = {{ briefs_payload|tojson }};
+  if (briefs && briefs.length) {
+    var riskValue = { low: 1, medium: 2, high: 3 };
+    var labels = briefs.slice().reverse().map(function(b) { return b.brief_date ? b.brief_date.slice(0, 10) : ''; });
+    var data = briefs.slice().reverse().map(function(b) { return riskValue[b.risk_level] || 1; });
+    var ctx4 = document.getElementById('historyRiskChart');
+    if (ctx4) {
+      new Chart(ctx4, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '风险等级 (1=低, 2=中, 3=高)',
+            data: data,
+            borderColor: '#8b5cf6',
+            backgroundColor: 'rgba(139,92,246,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 4
+          }]
+        },
+        options: makeOptions()
+      });
+    }
+  }
+})();
+</script>
+{% endblock %}

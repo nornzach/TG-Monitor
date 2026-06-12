@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ t('url_propagation.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('url_propagation.title') }}</h2>
+    <div class="page-desc">{{ t('url_propagation.desc') }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" class="filters" style="gap: 12px; flex-wrap: wrap;">
+    <select name="hours" style="min-width: 140px;">
+      <option value="6" {% if hours == 6 %}selected{% endif %}>6h</option>
+      <option value="12" {% if hours == 12 %}selected{% endif %}>12h</option>
+      <option value="24" {% if hours == 24 %}selected{% endif %}>24h</option>
+      <option value="72" {% if hours == 72 %}selected{% endif %}>72h</option>
+    </select>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+  </form>
+</div>
+
+{% if results %}
+<div class="panel">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 0; flex-wrap: wrap;">
+    <h3>{{ t('common.total_items', count=results|length) }}</h3>
+  </div>
+  <div style="padding: 16px;">
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr>
+            <th>URL</th>
+            <th>{{ t('url_propagation.domain') }}</th>
+            <th>{{ t('url_propagation.category') }}</th>
+            <th>{{ t('url_propagation.chat_count') }}</th>
+            <th>{{ t('url_propagation.appear_count') }}</th>
+            <th>{{ t('common.status') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in results %}
+          <tr>
+            <td style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <a href="{{ item.url | safe_url }}" target="_blank" rel="noopener" style="color: var(--primary);">{{ item.url }}</a>
+            </td>
+            <td><code style="font-size: 12px;">{{ item.domain or '-' }}</code></td>
+            <td><span class="badge">{{ item.category or '-' }}</span></td>
+            <td><span class="badge badge-blue">{{ item.chat_count }}</span></td>
+            <td>{{ item.appear_count }}</td>
+            <td>
+              {% if item.reputation_score is not none %}
+              <span class="badge {% if item.reputation_score >= 0.7 %}badge-green{% elif item.reputation_score >= 0.3 %}badge-amber{% else %}badge-red{% endif %}">
+                {{ "%.2f"|format(item.reputation_score) }}
+              </span>
+              {% else %}-{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">🔗</div>
+    <div class="empty-title">{{ t('url_propagation.no_data') }}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

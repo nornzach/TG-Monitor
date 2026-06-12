@@ -241,8 +241,7 @@ def cross_chat_urls(db: Session, limit: int = 50) -> list[dict]:
     )
     results = []
     for url in rows:
-        chat_ids = url.chat_ids_seen or []
-        chat_count = len(chat_ids) if isinstance(chat_ids, list) else 0
+        chat_count = _chat_ids_seen_count(url.chat_ids_seen)
         results.append({
             'id': url.id,
             'url': url.url,
@@ -255,6 +254,14 @@ def cross_chat_urls(db: Session, limit: int = 50) -> list[dict]:
             'first_seen_at': url.first_seen_at,
         })
     return results
+
+
+def _chat_ids_seen_count(value) -> int:
+    if isinstance(value, dict):
+        return len(value)
+    if isinstance(value, list):
+        return len({str(item) for item in value})
+    return 0
 
 
 def url_reputation_summary(db: Session) -> dict:

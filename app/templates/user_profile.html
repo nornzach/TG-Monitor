@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ t('user_profile.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('user_profile.title') }}</h2>
+    <div class="page-desc">{{ t('user_profile.desc') }}</div>
+  </div>
+</div>
+
+{% if profile %}
+<div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+  <div class="card">
+    <div class="card-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+    <div class="label">{{ t('user_profile.total_messages') }}</div>
+    <div class="value">{{ profile.total_messages }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg></div>
+    <div class="label">{{ t('user_profile.active_chats') }}</div>
+    <div class="value">{{ profile.active_chats }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+    <div class="label">{{ t('user_profile.last_7d') }}</div>
+    <div class="value">{{ profile.last_7d_messages }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
+    <div class="label">{{ t('user_profile.product_mentions') }}</div>
+    <div class="value">{{ profile.product_mentions }}</div>
+  </div>
+  <div class="card">
+    <div class="card-icon {% if profile.reputation_score >= 0.7 %}green{% elif profile.reputation_score >= 0.4 %}amber{% else %}red{% endif %}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
+    <div class="label">{{ t('user_profile.reputation') }}</div>
+    <div class="value">{{ "%.2f"|format(profile.reputation_score) }}</div>
+  </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+  <div class="panel">
+    <div style="padding: 16px 16px 0;">
+      <h3>{{ t('user_profile.top_chats') }}</h3>
+    </div>
+    <div style="padding: 16px;">
+      {% if profile.top_chats %}
+      <table>
+        <thead>
+          <tr><th>{{ t('chats.chat_title') }}</th><th>{{ t('common.count') }}</th></tr>
+        </thead>
+        <tbody>
+          {% for chat in profile.top_chats %}
+          <tr>
+            <td><a href="/messages?chat_id={{ chat.chat_id }}" style="color: var(--primary);">{{ chat.title }}</a></td>
+            <td>{{ chat.count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state" style="padding: 24px;"><div class="empty-title">{{ t('common.no_data') }}</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="padding: 16px 16px 0;">
+      <h3>{{ t('user_profile.top_keywords') }}</h3>
+    </div>
+    <div style="padding: 16px;">
+      {% if profile.top_keywords %}
+      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+        {% for kw in profile.top_keywords %}
+        <span class="badge badge-blue">{{ kw.keyword }} ({{ "%.0f"|format(kw.weight) }})</span>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding: 24px;"><div class="empty-title">{{ t('common.no_data') }}</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div style="padding: 16px 16px 0;">
+    <h3>{{ t('user_profile.tags') }}</h3>
+  </div>
+  <div style="padding: 16px;">
+    {% if profile.tags %}
+    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+      {% for tag in profile.tags %}
+      <span class="badge {% if tag == 'seller' %}badge-red{% elif tag == 'active' %}badge-green{% elif tag == 'cross_group' %}badge-blue{% else %}badge-amber{% endif %}">{{ tag }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="color: var(--text-muted);">{{ t('common.no_data') }}</div>
+    {% endif %}
+  </div>
+</div>
+
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">👤</div>
+    <div class="empty-title">{{ t('user_profile.not_found') }}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

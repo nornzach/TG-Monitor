@@ -9,40 +9,107 @@
 </div>
 
 <div class="filter-tabs">
-  <a href="/products" class="filter-tab {% if not selected_status %}active{% endif %}">
+  <a href="/products{% if selected_category or selected_chat_id or keyword %}?{% if selected_category %}category={{ selected_category }}&{% endif %}{% if selected_chat_id %}chat_id={{ selected_chat_id }}&{% endif %}{% if keyword %}keyword={{ keyword | urlencode }}{% endif %}{% endif %}" class="filter-tab {% if not selected_status %}active{% endif %}">
     {{ t('common.all') }} <span class="badge">{{ total_count }}</span>
   </a>
   {% for s in order %}
-  <a href="/products?status={{ s }}" class="filter-tab {% if selected_status == s %}active{% endif %}">
+  <a href="/products?status={{ s }}{% if selected_category %}&category={{ selected_category }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}{% if keyword %}&keyword={{ keyword | urlencode }}{% endif %}" class="filter-tab {% if selected_status == s %}active{% endif %}">
     {{ labels[s] }} <span class="badge">{{ counts[s] }}</span>
   </a>
   {% endfor %}
 </div>
 
-<div style="margin-bottom: 16px;">
-  <select onchange="if(this.value) window.location='/products?status={{ selected_status or '' }}&chat_id='+this.value; else window.location='/products?status={{ selected_status or '' }}';" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-primary); font-size: 13px;">
-    <option value="">{{ t('messages.chat_filter') }}</option>
-    {% for chat in chats %}
-    <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
-    {% endfor %}
-  </select>
+<div class="panel" style="padding: 16px;">
+  <form method="get" action="/products" class="filters">
+    <input type="hidden" name="status" value="{{ selected_status or '' }}">
+    <input type="text" name="keyword" value="{{ keyword }}" placeholder="{{ t('products.search_placeholder') }}" style="min-width: 220px;">
+    <select name="category" style="min-width: 160px;">
+      <option value="">{{ t('products.all_categories') }}</option>
+      {% for cat in category_order %}
+      <option value="{{ cat }}" {% if selected_category == cat %}selected{% endif %}>{{ category_labels[cat] }} ({{ category_counts.get(cat, 0) }})</option>
+      {% endfor %}
+    </select>
+    <select name="chat_id" style="min-width: 180px;">
+      <option value="">{{ t('messages.chat_filter') }}</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_status or selected_category or selected_chat_id or keyword %}
+    <a class="btn btn-secondary" href="/products">{{ t('common.reset') }}</a>
+    {% endif %}
+  </form>
 </div>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">{{ t('products.filtered_total') }}</div>
+    <div class="value">{{ aggregates.total }}</div>
+  </div>
+  <div class="card">
+    <div class="label">{{ t('products.group_count') }}</div>
+    <div class="value">{{ aggregates.group_count }}</div>
+  </div>
+  <div class="card">
+    <div class="label">{{ t('products.known_price_count') }}</div>
+    <div class="value">{{ aggregates.known_price_count }}</div>
+  </div>
+  <div class="card">
+    <div class="label">{{ t('products.seller_count') }}</div>
+    <div class="value">{{ aggregates.seller_count }}</div>
+  </div>
+</div>
+
+{% if aggregates.comparisons %}
+<div class="panel">
+  <h3 style="margin-bottom: 12px;">{{ t('products.price_compare') }}</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t('products.product_name') }}</th>
+        <th>{{ t('products.min_price') }}</th>
+        <th>{{ t('products.max_price') }}</th>
+        <th>{{ t('products.avg_price') }}</th>
+        <th>{{ t('products.seller_count') }}</th>
+        <th>{{ t('products.chat_count') }}</th>
+        <th>{{ t('products.last_seen') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in aggregates.comparisons %}
+      <tr>
+        <td>{{ item.name }}</td>
+        <td>{{ item.min_price }} {{ item.currency }}</td>
+        <td>{{ item.max_price }} {{ item.currency }}</td>
+        <td>{{ item.avg_price }} {{ item.currency }}</td>
+        <td>{{ item.seller_count }}</td>
+        <td>{{ item.chat_count }}</td>
+        <td>{{ item.last_seen_at | to_beijing('%Y-%m-%d %H:%M') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 {% if total_pages > 1 %}
 <div class="pagination">
-  {% if has_prev %}<a href="/products?page={{ page - 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  {% if has_prev %}<a href="{{ page_url_prefix }}{{ page - 1 }}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
   <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
-  {% if has_next %}<a href="/products?page={{ page + 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+  {% if has_next %}<a href="{{ page_url_prefix }}{{ page + 1 }}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
 </div>
 {% endif %}
 
 {% if products %}
 <div class="items-list">
-  {% for product in products %}
+  {% for row in products %}
+  {% set product = row.product %}
   <div class="item-card">
     <div class="item-header">
       <div class="item-title">{{ product.product_name }}</div>
       <div class="item-badges">
+        <span class="badge badge-blue">{{ category_labels.get(row.category, row.category) }}</span>
         {% if product.status == 'available' %}
         <span class="badge badge-green">{{ labels.get(product.status, product.status) }}</span>
         {% elif product.status == 'sold' %}
@@ -84,9 +151,9 @@
 
 {% if total_pages > 1 %}
 <div class="pagination" style="margin-top: 16px;">
-  {% if has_prev %}<a href="/products?page={{ page - 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
+  {% if has_prev %}<a href="{{ page_url_prefix }}{{ page - 1 }}" class="btn btn-sm">{{ t('common.prev') }}</a>{% endif %}
   <span class="pagination-info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
-  {% if has_next %}<a href="/products?page={{ page + 1 }}{% if selected_status %}&status={{ selected_status }}{% endif %}{% if selected_chat_id %}&chat_id={{ selected_chat_id }}{% endif %}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
+  {% if has_next %}<a href="{{ page_url_prefix }}{{ page + 1 }}" class="btn btn-sm">{{ t('common.next') }}</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

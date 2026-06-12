@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ t('system_events.title') }} - TG Monitor{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('system_events.title') }}</h2>
+    <div class="page-desc">{{ t('system_events.desc') }}</div>
+  </div>
+  <form action="/api/analyze/anomalies" method="post" data-loading-form style="display: inline;">
+    <button type="submit" class="btn btn-primary" data-loading-text="{{ t('common.loading') }}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      {{ t('common.refresh') }}
+    </button>
+  </form>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" class="filters" style="gap: 12px; flex-wrap: wrap;">
+    <select name="severity" style="min-width: 140px;">
+      <option value="">{{ t('system_events.all') }}</option>
+      <option value="info" {% if selected_severity == 'info' %}selected{% endif %}>Info</option>
+      <option value="warning" {% if selected_severity == 'warning' %}selected{% endif %}>Warning</option>
+      <option value="critical" {% if selected_severity == 'critical' %}selected{% endif %}>Critical</option>
+    </select>
+    <label class="checkbox-label" style="margin: 0;">
+      <input type="checkbox" name="unread_only" value="true" {% if unread_only %}checked{% endif %}>
+      {{ t('system_events.unread_only') }}
+    </label>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_severity or unread_only %}
+    <a class="btn btn-secondary" href="/system-events">{{ t('common.clear') }}</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if events %}
+<div class="panel">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 0; flex-wrap: wrap;">
+    <h3>{{ t('common.total_items', count=events|length) }}</h3>
+    <form action="/api/system-events/read-all" method="post" data-loading-form style="display: inline;">
+      <button type="submit" class="btn btn-secondary" data-loading-text="{{ t('common.loading') }}">{{ t('system_events.mark_all_read') }}</button>
+    </form>
+  </div>
+  <div style="padding: 16px;">
+    <div class="intel-timeline">
+      {% for event in events %}
+      <article class="summary-card intel-card" style="{% if not event.is_read %}border-left: 4px solid var(--primary);{% endif %}">
+        <div class="summary-header" style="align-items: flex-start; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="badge {% if event.severity == 'critical' %}badge-red{% elif event.severity == 'warning' %}badge-amber{% else %}badge-green{% endif %}">
+              {{ event.severity }}
+            </span>
+            <span class="badge badge-blue">{{ event.event_type }}</span>
+            <strong style="font-size: 14px;">{{ event.title }}</strong>
+          </div>
+          <span style="font-size: 12px; color: var(--text-muted); white-space: nowrap;">{{ event.created_at | to_beijing }}</span>
+        </div>
+        {% if event.detail %}
+        <div class="summary-body" style="margin-top: 8px; font-size: 13px;">{{ event.detail }}</div>
+        {% endif %}
+        {% if event.metric_value is not none %}
+        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+          {{ t('system_events.metric') }}: <strong>{{ "%.2f"|format(event.metric_value) }}</strong>
+        </div>
+        {% endif %}
+        {% if not event.is_read %}
+        <div style="margin-top: 12px;">
+          <form action="/api/system-events/{{ event.id }}/read" method="post" data-loading-form style="display: inline;">
+            <button type="submit" class="btn btn-sm btn-secondary" data-loading-text="{{ t('common.loading') }}">{{ t('system_events.mark_read') }}</button>
+          </form>
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">🛡️</div>
+    <div class="empty-title">{{ t('system_events.no_events') }}</div>
+    <div class="empty-desc">{{ t('system_events.no_events_desc') }}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

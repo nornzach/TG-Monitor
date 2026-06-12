@@ -172,7 +172,7 @@ Select provider, enter API Key, adjust Base URL and model as needed.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AI_SUMMARY_BATCH_SIZE` | 100 | Messages before triggering AI summary |
+| `AI_SUMMARY_BATCH_SIZE` | 1000 | Messages before triggering AI summary |
 | `AI_SUMMARY_RUNNING_TIMEOUT_MINUTES` | 30 | Running task timeout |
 
 > AI API Key and model are stored in the database, configured via `/settings` page.
@@ -455,7 +455,7 @@ python main.py
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AI_SUMMARY_BATCH_SIZE` | 100 | 触发 AI 摘要的消息数阈值 |
+| `AI_SUMMARY_BATCH_SIZE` | 1000 | 触发 AI 摘要的消息数阈值 |
 | `AI_SUMMARY_RUNNING_TIMEOUT_MINUTES` | 30 | 运行中超时时间 |
 
 > AI API Key 和模型存储在数据库中，通过 `/settings` 页面配置。

@@ -6,6 +6,7 @@ import logging
 import math
 import re
 from datetime import datetime, timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,9 @@ from .models import (
     AiContact,
     AiKeyLead,
     AiKeyLeadRun,
+    MarketIntelligenceItem,
+    ProductPriceHistory,
+    SummaryUrl,
 )
 from .config import settings
 
@@ -74,7 +78,20 @@ SYSTEM_PROMPT = """你是一个 Telegram 频道/群聊监控分析助手。你�
       "type": "string, tg_user|tg_group|email|phone|other",
       "value": "string, 联系方式内容"
     }
-  ]
+  ],
+  "market_intelligence": {
+    "market_trend": "string, 当前市场行情与供需变化总结",
+    "risk_level": "string, low|medium|high",
+    "risk_signals": ["string, 风险探知信号，如欺诈、资金盘、封号、交付异常"],
+    "price_changes": ["string, 价格波动、报价变化、涨跌、库存/供给变化"],
+    "legal_risks": ["string, 法律/合规风险，如实名、账号交易、洗钱、侵权、绕过监管"],
+    "hot_topics": ["string, 热点讨论、突然升温的话题"],
+    "gossip_signals": ["string, 吃瓜/爆料/舆情传闻，需标注不确定性"],
+    "industries": ["string, 涉及行业，如 AI API、账号交易、云服务、支付、代理等"],
+    "signal_types": ["string, market|risk|price|legal|hotspot|gossip"],
+    "key_people": ["string, 涉及的高频个人/账号/卖家"],
+    "timeline_points": ["string, 本批消息按时间顺序形成的关键变化点"]
+  }
 }
 
 ## 分类规则
@@ -101,6 +118,13 @@ SYSTEM_PROMPT = """你是一个 Telegram 频道/群聊监控分析助手。你�
   - other: 其他社交账号（微信、QQ、Signal 等）
 - 去重：相同联系方式只保留一条
 - 如果没有联系方式，返回空数组 []
+
+## 市场情报规则
+- market_intelligence 必须覆盖当前市场行情、风险探知、价格波动变化、法律风险感知、热点讨论感知、吃瓜感知。
+- industries 用业务行业/赛道描述，不要只写“其他”；signal_types 只能从 market/risk/price/legal/hotspot/gossip 中选择。
+- key_people 面向“个人/账号/卖家/高频发言者”，不要编造未在消息中出现的人。
+- timeline_points 要体现“变化”，按时间顺序保留本批消息里的趋势、风险、价格、热点演化。
+- gossip_signals 是舆情/爆料线索，必须避免下定论，使用“传闻/有人提到/需核实”等表述。
 
 ## 注意事项
 - 如果某类数据不存在，返回空数组 []，不要省略字段
@@ -316,6 +340,19 @@ def _validate_and_normalize(result: dict) -> dict:
         'media_summary': '',
         'products': [],
         'contacts': [],
+        'market_intelligence': {
+            'market_trend': '',
+            'risk_level': 'low',
+            'risk_signals': [],
+            'price_changes': [],
+            'legal_risks': [],
+            'hot_topics': [],
+            'gossip_signals': [],
+            'industries': [],
+            'signal_types': [],
+            'key_people': [],
+            'timeline_points': [],
+        },
     }
     if isinstance(result.get('summary'), str) and result['summary'].strip():
         validated['summary'] = result['summary'].strip()
@@ -393,7 +430,66 @@ def _validate_and_normalize(result: dict) -> dict:
                 'value': contact_value,
             })
 
+    validated['market_intelligence'] = _validate_market_intelligence(result.get('market_intelligence'))
+
     return validated
+
+
+def _clean_text_item(value, max_len: int = 240) -> str:
+    text = str(value or '').strip()
+    return text[:max_len]
+
+
+def _clean_text_list(raw, limit: int = 8, max_len: int = 240) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        text = _clean_text_item(value, max_len=max_len)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _validate_market_intelligence(raw) -> dict:
+    allowed_risk_levels = {'low', 'medium', 'high'}
+    allowed_signal_types = {'market', 'risk', 'price', 'legal', 'hotspot', 'gossip'}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    risk_level = str(raw.get('risk_level') or 'low').strip().lower()
+    if risk_level not in allowed_risk_levels:
+        risk_level = 'low'
+
+    signal_types = []
+    seen_types: set[str] = set()
+    for value in raw.get('signal_types') if isinstance(raw.get('signal_types'), list) else []:
+        signal_type = str(value or '').strip().lower()
+        if signal_type in allowed_signal_types and signal_type not in seen_types:
+            seen_types.add(signal_type)
+            signal_types.append(signal_type)
+
+    return {
+        'market_trend': _clean_text_item(raw.get('market_trend'), max_len=600),
+        'risk_level': risk_level,
+        'risk_signals': _clean_text_list(raw.get('risk_signals'), limit=8),
+        'price_changes': _clean_text_list(raw.get('price_changes'), limit=8),
+        'legal_risks': _clean_text_list(raw.get('legal_risks'), limit=8),
+        'hot_topics': _clean_text_list(raw.get('hot_topics'), limit=8),
+        'gossip_signals': _clean_text_list(raw.get('gossip_signals'), limit=8),
+        'industries': _clean_text_list(raw.get('industries'), limit=8, max_len=80),
+        'signal_types': signal_types,
+        'key_people': _clean_text_list(raw.get('key_people'), limit=8, max_len=80),
+        'timeline_points': _clean_text_list(raw.get('timeline_points'), limit=10),
+    }
 
 
 def _extract_json_from_text(text: str) -> dict:
@@ -1130,12 +1226,19 @@ async def run_summary_for_chat(chat_id: int) -> None:
 
         last_msg_id = last.end_message_id if last else 0
 
+        if settings.ai_summary_slide_window_enabled:
+            batch = settings.ai_summary_slide_window_size
+            min_required = min(settings.ai_summary_min_batch_size, batch)
+        else:
+            batch = settings.ai_summary_batch_size
+            min_required = settings.ai_summary_batch_size
+
         msgs = db.query(Message).filter(
             Message.chat_id == chat_id,
             Message.id > last_msg_id,
-        ).order_by(Message.id).limit(settings.ai_summary_batch_size).all()
+        ).order_by(Message.id).limit(batch).all()
 
-        if len(msgs) < settings.ai_summary_batch_size:
+        if len(msgs) < min_required:
             return
 
         start_id = msgs[0].id
@@ -1179,6 +1282,8 @@ async def run_summary_for_chat(chat_id: int) -> None:
             extracted['products'] = result['products']
         if result.get('contacts'):
             extracted['contacts'] = result['contacts']
+        if result.get('market_intelligence'):
+            extracted['market_intelligence'] = result['market_intelligence']
         summary.extracted_urls = extracted
         summary.status = 'success'
         summary.completed_at = datetime.utcnow()
@@ -1193,6 +1298,8 @@ async def run_summary_for_chat(chat_id: int) -> None:
         _upsert_urls(db, result, chat_id, summary_id)
         _upsert_products(db, result.get('products', []), chat_id, summary_id)
         _upsert_contacts(db, result.get('contacts', []), chat_id, summary_id)
+        _save_market_intelligence(db, summary_id, chat_id, result.get('market_intelligence', {}))
+        _save_summary_urls(db, summary_id, result)
 
     except Exception as exc:
         logger.exception('AI summary failed chat=%s', chat_id)
@@ -1264,7 +1371,7 @@ async def run_summary_now(chat_id: int, message_count: int = 0) -> int:
 
         summary.summary_text = result.get('summary', '')
         extracted = {}
-        for key in ('relay_urls', 'seller_urls', 'other_urls', 'top_senders', 'media_summary', 'products', 'contacts'):
+        for key in ('relay_urls', 'seller_urls', 'other_urls', 'top_senders', 'media_summary', 'products', 'contacts', 'market_intelligence'):
             if result.get(key):
                 extracted[key] = result[key]
         summary.extracted_urls = extracted
@@ -1274,6 +1381,8 @@ async def run_summary_now(chat_id: int, message_count: int = 0) -> int:
         _upsert_urls(db, result, chat_id, summary_id)
         _upsert_products(db, result.get('products', []), chat_id, summary_id)
         _upsert_contacts(db, result.get('contacts', []), chat_id, summary_id)
+        _save_market_intelligence(db, summary_id, chat_id, result.get('market_intelligence', {}))
+        _save_summary_urls(db, summary_id, result)
         return summary_id
 
     except Exception as exc:
@@ -1288,13 +1397,52 @@ async def run_summary_now(chat_id: int, message_count: int = 0) -> int:
 
 
 def _url_hash(url: str) -> str:
-    return hashlib.sha256(url.encode('utf-8')).hexdigest()
+    return hashlib.sha256(normalize_url_for_dedup(url).encode('utf-8')).hexdigest()
+
+
+TRACKING_QUERY_KEYS = {
+    'fbclid', 'gclid', 'dclid', 'yclid', 'mc_cid', 'mc_eid', 'igshid',
+    'spm', 'from', 'share', 'share_source', 'ref', 'ref_src',
+}
+
+
+def normalize_url_for_dedup(url: str) -> str:
+    cleaned = _clean_url(url)
+    try:
+        parsed = urlsplit(cleaned)
+    except Exception:
+        return cleaned
+    if not parsed.scheme or not parsed.netloc:
+        return cleaned
+
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or '').lower()
+    if not hostname:
+        return cleaned
+
+    netloc = hostname
+    if parsed.port and not ((scheme == 'http' and parsed.port == 80) or (scheme == 'https' and parsed.port == 443)):
+        netloc = f'{netloc}:{parsed.port}'
+
+    path = parsed.path or '/'
+    if len(path) > 1:
+        path = path.rstrip('/')
+
+    query_items = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        normalized_key = key.strip()
+        lower_key = normalized_key.lower()
+        if lower_key.startswith('utm_') or lower_key in TRACKING_QUERY_KEYS:
+            continue
+        query_items.append((normalized_key, value.strip()))
+    query = urlencode(sorted(query_items, key=lambda item: (item[0].lower(), item[1])))
+    return urlunsplit((scheme, netloc, path, query, ''))
 
 
 def _extract_domain(url: str) -> str | None:
     try:
         from urllib.parse import urlparse
-        parsed = urlparse(url)
+        parsed = urlparse(normalize_url_for_dedup(url))
         return parsed.netloc or None
     except Exception:
         return None
@@ -1347,11 +1495,13 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
             url = _clean_url(url)
             if not URL_PATTERN.match(url):
                 continue
-            h = _url_hash(url)
-            domain = _extract_domain(url)
+            canonical_url = normalize_url_for_dedup(url)
+            h = _url_hash(canonical_url)
+            domain = _extract_domain(canonical_url)
             try:
                 existing = db.query(AiUrl).filter(AiUrl.url_hash == h).first()
                 if existing:
+                    existing.url = canonical_url
                     existing.last_seen_at = now
                     existing.appearance_count = (existing.appearance_count or 1) + 1
                     if domain and not existing.domain:
@@ -1370,7 +1520,7 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
                     chat_seen = {str(chat_id): now.isoformat()} if chat_id else None
                     reputation = _compute_reputation(1, chat_seen, domain)
                     existing = AiUrl(
-                        url=url, url_hash=h, category=category, domain=domain,
+                        url=canonical_url, url_hash=h, category=category, domain=domain,
                         appearance_count=1, chat_ids_seen=chat_seen,
                         reputation_score=reputation,
                         first_seen_at=now, last_seen_at=now
@@ -1398,6 +1548,116 @@ def _upsert_urls(db: Session, result: dict, chat_id: int | None = None, summary_
     db.commit()
 
 
+def _merge_chat_ids_seen(*values: dict | None) -> dict | None:
+    merged: dict[str, str] = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, seen_at in value.items():
+            if key not in merged or str(seen_at) < str(merged[key]):
+                merged[str(key)] = str(seen_at)
+    return merged or None
+
+
+def deduplicate_existing_urls() -> dict:
+    db = SessionLocal()
+    try:
+        urls = db.query(AiUrl).order_by(AiUrl.id.asc()).all()
+        groups: dict[str, list[AiUrl]] = {}
+        canonical_urls: dict[str, str] = {}
+        for row in urls:
+            canonical = normalize_url_for_dedup(row.url)
+            canonical_hash = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+            groups.setdefault(canonical_hash, []).append(row)
+            canonical_urls[canonical_hash] = canonical
+
+        groups_merged = 0
+        rows_removed = 0
+        rows_normalized = 0
+        for canonical_hash, rows in groups.items():
+            canonical = canonical_urls[canonical_hash]
+            keeper = next((row for row in rows if row.url_hash == canonical_hash), rows[0])
+            duplicates = [row for row in rows if row.id != keeper.id]
+
+            if duplicates:
+                groups_merged += 1
+                for duplicate in duplicates:
+                    keeper.appearance_count = (keeper.appearance_count or 0) + (duplicate.appearance_count or 0)
+                    keeper.chat_ids_seen = _merge_chat_ids_seen(keeper.chat_ids_seen, duplicate.chat_ids_seen)
+                    if duplicate.first_seen_at and (not keeper.first_seen_at or duplicate.first_seen_at < keeper.first_seen_at):
+                        keeper.first_seen_at = duplicate.first_seen_at
+                    if duplicate.last_seen_at and (not keeper.last_seen_at or duplicate.last_seen_at > keeper.last_seen_at):
+                        keeper.last_seen_at = duplicate.last_seen_at
+                    if keeper.category == 'other' and duplicate.category != 'other':
+                        keeper.category = duplicate.category
+                    if duplicate.classification_status == 'classified' and keeper.classification_status != 'classified':
+                        keeper.classification_status = duplicate.classification_status
+                        keeper.primary_category_id = duplicate.primary_category_id
+                        keeper.classification_run_id = duplicate.classification_run_id
+                        keeper.classified_at = duplicate.classified_at
+                        keeper.classification_error = duplicate.classification_error
+
+                    db.query(AiUrlAppearance).filter(AiUrlAppearance.url_id == duplicate.id).update(
+                        {AiUrlAppearance.url_id: keeper.id}, synchronize_session=False
+                    )
+                    for classification in db.query(AiUrlClassification).filter(AiUrlClassification.url_id == duplicate.id).all():
+                        existing = db.query(AiUrlClassification).filter(
+                            AiUrlClassification.url_id == keeper.id,
+                            AiUrlClassification.category_id == classification.category_id,
+                        ).first()
+                        if existing:
+                            db.delete(classification)
+                        else:
+                            classification.url_id = keeper.id
+                    db.delete(duplicate)
+                    rows_removed += 1
+                db.flush()
+
+            if keeper.url != canonical or keeper.url_hash != canonical_hash or keeper.domain != _extract_domain(canonical):
+                rows_normalized += 1
+            keeper.url = canonical
+            keeper.url_hash = canonical_hash
+            keeper.domain = _extract_domain(canonical)
+            keeper.reputation_score = _compute_reputation(
+                keeper.appearance_count or 1, keeper.chat_ids_seen, keeper.domain
+            )
+
+        db.commit()
+        return {
+            'total_urls': len(urls),
+            'groups_merged': groups_merged,
+            'rows_removed': rows_removed,
+            'rows_normalized': rows_normalized,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def url_duplicate_stats(limit: int = 10) -> dict:
+    db = SessionLocal()
+    try:
+        groups: dict[str, dict] = {}
+        for row in db.query(AiUrl).order_by(AiUrl.id.asc()).all():
+            canonical = normalize_url_for_dedup(row.url)
+            canonical_hash = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+            group = groups.setdefault(canonical_hash, {'canonical_url': canonical, 'count': 0, 'examples': []})
+            group['count'] += 1
+            if len(group['examples']) < 3:
+                group['examples'].append(row.url)
+        duplicates = [group for group in groups.values() if group['count'] > 1]
+        duplicates.sort(key=lambda item: item['count'], reverse=True)
+        return {
+            'duplicate_groups': len(duplicates),
+            'duplicate_rows': sum(group['count'] - 1 for group in duplicates),
+            'examples': duplicates[:limit],
+        }
+    finally:
+        db.close()
+
+
 def upsert_discovered_urls(urls: list[str], category: str = 'other', chat_id: int | None = None) -> int:
     category_key = {
         'relay': 'relay_urls',
@@ -1422,31 +1682,47 @@ def _upsert_products(db: Session, products: list[dict], chat_id: int, summary_id
         if not p.get('name'):
             continue
         try:
-            # Check for duplicate by (chat_id, product_name, price_amount)
+            # Find product by chat + name (track price changes across time)
             existing = db.query(AiProduct).filter(
                 AiProduct.chat_id == chat_id,
                 AiProduct.product_name == p['name'],
-                AiProduct.price_amount == p.get('price'),
-            ).first()
+            ).order_by(AiProduct.last_seen_at.desc()).first()
+            currency = p.get('currency', 'CNY')
             if existing:
+                # Record price history if price changed
+                old_price = existing.price_amount
+                new_price = p.get('price')
+                if old_price != new_price:
+                    _save_product_price_history(
+                        db, existing, new_price, currency,
+                        source_message_id=summary_id, seller_contact=p.get('seller') or existing.seller_contact,
+                    )
                 existing.last_seen_at = now
+                existing.price_amount = new_price
+                existing.price_currency = currency
                 if p.get('seller'):
                     existing.seller_contact = p['seller']
                 if p.get('status'):
                     existing.status = p['status']
+                existing.summary_id = summary_id
             else:
-                db.add(AiProduct(
+                product = AiProduct(
                     chat_id=chat_id,
                     summary_id=summary_id,
                     product_name=p['name'],
                     price_amount=p.get('price'),
-                    price_currency=p.get('currency', 'CNY'),
+                    price_currency=currency,
                     seller_contact=p.get('seller'),
                     status=p.get('status', 'available'),
                     first_seen_at=now,
                     last_seen_at=now,
-                ))
+                )
+                db.add(product)
                 db.flush()
+                _save_product_price_history(
+                    db, product, p.get('price'), currency,
+                    source_message_id=summary_id, seller_contact=p.get('seller'),
+                )
         except Exception as exc:
             db.rollback()
             logger.debug('Product upsert error for %s: %s', p.get('name'), exc)
@@ -1481,3 +1757,128 @@ def _upsert_contacts(db: Session, contacts: list[dict], chat_id: int, summary_id
             db.rollback()
             logger.debug('Contact upsert error for %s: %s', c.get('value'), exc)
     db.commit()
+
+
+def _save_product_price_history(db: Session, product: AiProduct, new_price: float | None, currency: str, source_message_id: int | None = None, seller_contact: str | None = None) -> None:
+    """Record a price change into history."""
+    try:
+        db.add(ProductPriceHistory(
+            product_id=product.id,
+            price_amount=new_price,
+            price_currency=currency,
+            source_message_id=source_message_id,
+            seller_contact=seller_contact,
+        ))
+        db.flush()
+    except Exception as exc:
+        logger.warning('Price history save failed: %s', exc)
+
+
+def _save_market_intelligence(db: Session, summary_id: int, chat_id: int, intel: dict) -> int:
+    """Persist structured market intelligence items."""
+    if not intel or not isinstance(intel, dict):
+        return 0
+    item_type_map = {
+        'market_trend': 'market',
+        'risk_signals': 'risk',
+        'price_changes': 'price',
+        'legal_risks': 'legal',
+        'hot_topics': 'hotspot',
+        'gossip_signals': 'gossip',
+        'industries': 'industry',
+        'key_people': 'key_people',
+        'timeline_points': 'timeline',
+    }
+    count = 0
+    for field, item_type in item_type_map.items():
+        value = intel.get(field)
+        if not value:
+            continue
+        if isinstance(value, str) and value.strip():
+            db.add(MarketIntelligenceItem(
+                summary_id=summary_id,
+                chat_id=chat_id,
+                item_type=item_type,
+                content=value.strip()[:2000],
+                confidence=None,
+                related_entities_json=None,
+            ))
+            count += 1
+        elif isinstance(value, list):
+            for item in value:
+                text = str(item).strip()[:2000]
+                if text:
+                    db.add(MarketIntelligenceItem(
+                        summary_id=summary_id,
+                        chat_id=chat_id,
+                        item_type=item_type,
+                        content=text,
+                        confidence=None,
+                        related_entities_json=None,
+                    ))
+                    count += 1
+    # signal_types as metadata
+    signal_types = intel.get('signal_types')
+    if isinstance(signal_types, list) and signal_types:
+        db.add(MarketIntelligenceItem(
+            summary_id=summary_id,
+            chat_id=chat_id,
+            item_type='signal_types',
+            content=','.join(signal_types),
+            confidence=None,
+            related_entities_json={'types': signal_types},
+        ))
+        count += 1
+    try:
+        db.flush()
+    except Exception as exc:
+        logger.warning('Market intelligence save failed: %s', exc)
+    return count
+
+
+def _save_summary_urls(db: Session, summary_id: int, result: dict) -> None:
+    """Link AI summary to discovered URLs."""
+    url_type_map = {
+        'relay_urls': 'relay',
+        'seller_urls': 'seller',
+        'other_urls': 'other',
+    }
+    now = datetime.utcnow()
+    for json_key, url_type in url_type_map.items():
+        urls = result.get(json_key, [])
+        if not isinstance(urls, list):
+            continue
+        for url in urls:
+            if not isinstance(url, str) or not url.strip():
+                continue
+            canonical = normalize_url_for_dedup(_clean_url(url))
+            h = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+            existing = db.query(AiUrl).filter(AiUrl.url_hash == h).first()
+            if not existing:
+                # URL may not have been persisted yet; upsert it
+                domain = _extract_domain(canonical)
+                chat_seen = None
+                existing = AiUrl(
+                    url=canonical,
+                    url_hash=h,
+                    category=url_type,
+                    domain=domain,
+                    appearance_count=1,
+                    chat_ids_seen=chat_seen,
+                    reputation_score=_compute_reputation(1, chat_seen, domain),
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+                db.add(existing)
+                db.flush()
+            # Create or update link
+            link = db.query(SummaryUrl).filter(
+                SummaryUrl.summary_id == summary_id,
+                SummaryUrl.url_id == existing.id,
+            ).first()
+            if not link:
+                db.add(SummaryUrl(summary_id=summary_id, url_id=existing.id, url_type=url_type))
+    try:
+        db.flush()
+    except Exception as exc:
+        logger.warning('Summary URL link failed: %s', exc)

@@ -4,6 +4,7 @@ sqlalchemy==2.0.49
 pymysql==1.1.2
 cryptography==46.0.7
 telethon==1.43.1
+PySocks==1.7.1
 git+https://github.com/thedemons/opentele.git
 jinja2==3.1.6
 python-multipart==0.0.26

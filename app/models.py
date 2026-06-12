@@ -33,6 +33,33 @@ class MonitoredChat(Base):
     ai_summaries: Mapped[list['AiSummary']] = relationship('AiSummary', back_populates='chat', cascade='all, delete-orphan')
 
 
+class TelegramJoinTarget(Base):
+    __tablename__ = 'telegram_join_targets'
+    __table_args__ = (
+        UniqueConstraint('normalized_key', name='uq_join_target_key'),
+        Index('idx_join_target_status_next', 'status', 'next_attempt_at'),
+        Index('idx_join_target_monitored_chat', 'monitored_chat_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(500), nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(30), default='unknown', index=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default='pending', index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    monitored_chat_id: Mapped[int | None] = mapped_column(ForeignKey('monitored_chats.id'), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    monitored_chat: Mapped['MonitoredChat | None'] = relationship('MonitoredChat', foreign_keys=[monitored_chat_id])
+
+
 class TelegramUser(Base):
     __tablename__ = 'telegram_users'
 
@@ -329,3 +356,207 @@ class AlertMatch(Base):
     rule: Mapped['AlertRule'] = relationship('AlertRule', foreign_keys=[rule_id])
     message: Mapped['Message'] = relationship('Message', foreign_keys=[message_id])
     chat: Mapped['MonitoredChat'] = relationship('MonitoredChat', foreign_keys=[chat_id])
+
+
+class MessageEdit(Base):
+    __tablename__ = 'message_edits'
+    __table_args__ = (
+        Index('idx_message_edits_message_id', 'message_id'),
+        Index('idx_message_edits_edit_date', 'edit_date'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey('messages.id', ondelete='CASCADE'), index=True)
+    old_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edit_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MessageReaction(Base):
+    __tablename__ = 'message_reactions'
+    __table_args__ = (
+        UniqueConstraint('message_id', 'reaction_type', name='uq_message_reaction'),
+        Index('idx_message_reactions_message_id', 'message_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey('messages.id', ondelete='CASCADE'), index=True)
+    reaction_type: Mapped[str] = mapped_column(String(100), default='like')
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MessageFingerprint(Base):
+    __tablename__ = 'message_fingerprints'
+    __table_args__ = (
+        UniqueConstraint('fingerprint_hash', name='uq_fingerprint_hash'),
+        Index('idx_message_fprints_msg_id', 'message_id'),
+        Index('idx_message_fprints_similarity', 'similarity_hash'),
+        Index('idx_message_fprints_canonical', 'canonical_message_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey('messages.id', ondelete='CASCADE'), index=True)
+    fingerprint_hash: Mapped[str] = mapped_column(String(64))
+    similarity_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    canonical_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MessageViewsHistory(Base):
+    __tablename__ = 'message_views_history'
+    __table_args__ = (
+        Index('idx_views_history_message_id', 'message_id'),
+        Index('idx_views_history_recorded', 'recorded_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey('messages.id', ondelete='CASCADE'), index=True)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    forwards: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UserDailyStat(Base):
+    __tablename__ = 'user_daily_stats'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='uq_user_daily_stats'),
+        Index('idx_user_daily_stats_user_id', 'user_id'),
+        Index('idx_user_daily_stats_date', 'date'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('telegram_users.id', ondelete='CASCADE'), index=True)
+    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    word_count: Mapped[int] = mapped_column(Integer, default=0)
+    media_count: Mapped[int] = mapped_column(Integer, default=0)
+    active_hours_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    top_chats_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reputation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ProductPriceHistory(Base):
+    __tablename__ = 'product_price_history'
+    __table_args__ = (
+        Index('idx_price_history_product_id', 'product_id'),
+        Index('idx_price_history_recorded', 'recorded_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey('ai_products.id', ondelete='CASCADE'), index=True)
+    price_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_currency: Mapped[str] = mapped_column(String(20), default='CNY')
+    source_message_id: Mapped[int | None] = mapped_column(ForeignKey('messages.id', ondelete='SET NULL'), nullable=True)
+    seller_contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    product: Mapped['AiProduct'] = relationship('AiProduct', foreign_keys=[product_id])
+
+
+class MarketIntelligenceItem(Base):
+    __tablename__ = 'market_intelligence_items'
+    __table_args__ = (
+        Index('idx_market_intel_summary_id', 'summary_id'),
+        Index('idx_market_intel_chat_id', 'chat_id'),
+        Index('idx_market_intel_item_type', 'item_type'),
+        Index('idx_market_intel_created', 'created_at'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    summary_id: Mapped[int] = mapped_column(ForeignKey('ai_summaries.id', ondelete='CASCADE'), index=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey('monitored_chats.id', ondelete='CASCADE'), index=True)
+    item_type: Mapped[str] = mapped_column(String(30), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    related_entities_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UrlMetadata(Base):
+    __tablename__ = 'url_metadata'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    url_id: Mapped[int] = mapped_column(ForeignKey('ai_urls.id', ondelete='CASCADE'), unique=True)
+    page_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    page_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    screenshot_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SummaryUrl(Base):
+    __tablename__ = 'summary_urls'
+    __table_args__ = (
+        UniqueConstraint('summary_id', 'url_id', name='uq_summary_url'),
+        Index('idx_summary_urls_summary_id', 'summary_id'),
+        Index('idx_summary_urls_url_id', 'url_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    summary_id: Mapped[int] = mapped_column(ForeignKey('ai_summaries.id', ondelete='CASCADE'), index=True)
+    url_id: Mapped[int] = mapped_column(ForeignKey('ai_urls.id', ondelete='CASCADE'), index=True)
+    url_type: Mapped[str] = mapped_column(String(20), default='other')
+
+
+class DailyChatStat(Base):
+    __tablename__ = 'daily_chat_stats'
+    __table_args__ = (
+        UniqueConstraint('chat_id', 'date', name='uq_daily_chat_stats'),
+        Index('idx_daily_chat_stats_chat_id', 'chat_id'),
+        Index('idx_daily_chat_stats_date', 'date'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey('monitored_chats.id', ondelete='CASCADE'), index=True)
+    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    unique_senders: Mapped[int] = mapped_column(Integer, default=0)
+    media_count: Mapped[int] = mapped_column(Integer, default=0)
+    url_count: Mapped[int] = mapped_column(Integer, default=0)
+    new_user_count: Mapped[int] = mapped_column(Integer, default=0)
+    top_keywords_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    avg_message_length: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SystemEvent(Base):
+    __tablename__ = 'system_events'
+    __table_args__ = (
+        Index('idx_system_events_type', 'event_type'),
+        Index('idx_system_events_severity', 'severity'),
+        Index('idx_system_events_chat_id', 'chat_id'),
+        Index('idx_system_events_created', 'created_at'),
+        Index('idx_system_events_is_read', 'is_read'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default='info')
+    chat_id: Mapped[int | None] = mapped_column(ForeignKey('monitored_chats.id', ondelete='CASCADE'), nullable=True, index=True)
+    message_id: Mapped[int | None] = mapped_column(ForeignKey('messages.id', ondelete='SET NULL'), nullable=True)
+    title: Mapped[str] = mapped_column(String(255))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metric_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DailyMarketBrief(Base):
+    __tablename__ = 'daily_market_briefs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    brief_date: Mapped[datetime] = mapped_column(DateTime, unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    content: Mapped[str] = mapped_column(Text)
+    signals_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    hot_topics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    risk_level: Mapped[str] = mapped_column(String(20), default='low')
+    price_moves_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    generated_by: Mapped[str] = mapped_column(String(50), default='ai')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

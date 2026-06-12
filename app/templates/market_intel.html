@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}{{ t('market_intel.title') }} - TG Monitor{% endblock %}
+
+{% macro intel_list(title, items) %}
+  {% if items %}
+  <section class="intel-section">
+    <div class="intel-section-title">{{ title }}</div>
+    <ul class="intel-list">
+      {% for item in items %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h2>{{ t('market_intel.title') }}</h2>
+    <div class="page-desc">{{ t('market_intel.desc', count=ai_summary_batch_size) }}</div>
+  </div>
+</div>
+
+<div class="panel" style="padding: 16px;">
+  <form method="get" class="filters">
+    <select name="chat_id" style="min-width: 180px;">
+      <option value="">{{ t('market_intel.all_chats') }}</option>
+      {% for chat in chats %}
+      <option value="{{ chat.id }}" {% if selected_chat_id == chat.id %}selected{% endif %}>{{ chat.title }}</option>
+      {% endfor %}
+    </select>
+    <select name="industry" style="min-width: 160px;">
+      <option value="">{{ t('market_intel.all_industries') }}</option>
+      {% for industry, count in industry_counts %}
+      <option value="{{ industry }}" {% if selected_industry == industry %}selected{% endif %}>{{ industry }} ({{ count }})</option>
+      {% endfor %}
+    </select>
+    <select name="signal_type" style="min-width: 150px;">
+      <option value="">{{ t('market_intel.all_types') }}</option>
+      {% for signal_type, label in signal_type_labels.items() %}
+      <option value="{{ signal_type }}" {% if selected_signal_type == signal_type %}selected{% endif %}>{{ label }} ({{ signal_type_counts.get(signal_type, 0) }})</option>
+      {% endfor %}
+    </select>
+    <button class="btn-primary" type="submit">{{ t('common.filter') }}</button>
+    {% if selected_chat_id or selected_industry or selected_signal_type %}
+    <a class="btn btn-secondary" href="/market-intel">{{ t('common.clear') }}</a>
+    {% endif %}
+  </form>
+</div>
+
+{% if rows %}
+<div class="intel-timeline">
+  {% for row in rows %}
+  {% set s = row.summary %}
+  {% set intel = row.intel %}
+  <article class="summary-card intel-card">
+    <div class="intel-marker"></div>
+    <div class="summary-header">
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <strong style="font-size: 14px;">{{ row.chat_title }}</strong>
+        <span class="badge {% if intel.risk_level == 'high' %}badge-red{% elif intel.risk_level == 'medium' %}badge-amber{% else %}badge-green{% endif %}">
+          {{ t('market_intel.risk_level') }}: {{ t('common.' ~ intel.risk_level) }}
+        </span>
+        {% for signal_type in intel.signal_types %}
+        <span class="badge badge-blue">{{ signal_type_labels.get(signal_type, signal_type) }}</span>
+        {% endfor %}
+      </div>
+      <span style="font-size: 12px; color: var(--text-muted);">
+        {{ s.message_count }} {{ t('summaries.message_count') }}
+        {% if s.completed_at %} · {{ s.completed_at | to_beijing }}{% elif s.triggered_at %} · {{ s.triggered_at | to_beijing }}{% endif %}
+      </span>
+    </div>
+
+    <div class="intel-meta">
+      <span>{{ t('summaries.message_range') }}: #{{ s.start_message_id }} - #{{ s.end_message_id }}</span>
+      {% if intel.industries %}
+      <span>{{ t('market_intel.industries') }}: {{ intel.industries | join(', ') }}</span>
+      {% endif %}
+      {% if row.people %}
+      <span>{{ t('market_intel.people') }}: {{ row.people | join(', ') }}</span>
+      {% endif %}
+    </div>
+
+    {% if intel.market_trend %}
+    <div class="summary-body intel-trend">{{ intel.market_trend }}</div>
+    {% elif s.summary_text %}
+    <div class="summary-body intel-trend">{{ s.summary_text }}</div>
+    {% endif %}
+
+    <div class="intel-grid">
+      {{ intel_list(t('market_intel.price_changes'), intel.price_changes) }}
+      {{ intel_list(t('market_intel.risk_signals'), intel.risk_signals) }}
+      {{ intel_list(t('market_intel.legal_risks'), intel.legal_risks) }}
+      {{ intel_list(t('market_intel.hot_topics'), intel.hot_topics) }}
+      {{ intel_list(t('market_intel.gossip_signals'), intel.gossip_signals) }}
+      {{ intel_list(t('market_intel.timeline_points'), intel.timeline_points) }}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  <div class="empty-state">
+    <div class="empty-icon">AI</div>
+    <div class="empty-title">{{ t('market_intel.no_items') }}</div>
+    <div class="empty-desc">{{ t('market_intel.no_items_desc', count=ai_summary_batch_size) }}</div>
+  </div>
+</div>
+{% endif %}
+
+{% if total_pages > 1 %}
+<div class="panel" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;">
+  <div style="font-size: 13px; color: var(--text-secondary);">{{ t('common.total_items', count=total_count) }}</div>
+  <div class="pagination">
+    <span class="info">{{ t('common.page_info', page=page, total=total_pages) }}</span>
+    {% if has_prev %}
+    <a class="btn btn-sm btn-secondary" href="{{ page_url_prefix }}{{ page - 1 }}">{{ t('common.prev') }}</a>
+    {% endif %}
+    {% if has_next %}
+    <a class="btn btn-sm btn-secondary" href="{{ page_url_prefix }}{{ page + 1 }}">{{ t('common.next') }}</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

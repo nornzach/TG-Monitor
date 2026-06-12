@@ -16,7 +16,15 @@ def init_database() -> None:
             f"CREATE DATABASE IF NOT EXISTS `{settings.database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
         ))
     admin_engine.dispose()
-    from .models import MonitoredChat, TelegramUser, Message, MessageKeyword, SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiUrlCategory, AiUrlClassificationRun, AiUrlClassification, AiProduct, AiContact, AiKeyLeadRun, AiKeyLead, AlertRule, AlertMatch  # noqa
+    from .models import (
+        MonitoredChat, TelegramJoinTarget, TelegramUser, Message, MessageKeyword,
+        SyncRun, AppSetting, AiSummary, AiUrl, AiUrlAppearance, AiUrlCategory,
+        AiUrlClassificationRun, AiUrlClassification, AiProduct, AiContact,
+        AiKeyLeadRun, AiKeyLead, AlertRule, AlertMatch,
+        MessageEdit, MessageReaction, MessageFingerprint, MessageViewsHistory,
+        UserDailyStat, ProductPriceHistory, MarketIntelligenceItem, UrlMetadata,
+        SummaryUrl, DailyChatStat, SystemEvent, DailyMarketBrief,
+    )  # noqa
     Base.metadata.create_all(bind=engine)
     ensure_runtime_indexes()
     seed_default_url_categories()

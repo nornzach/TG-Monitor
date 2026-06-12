@@ -6,6 +6,16 @@
     <h2>{{ t('dashboard.title') }}</h2>
     <div class="page-desc">{{ t('dashboard.desc') }}</div>
   </div>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+    <a href="/messages" class="btn btn-secondary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      {{ t('sidebar.messages') }}
+    </a>
+    <a href="/alerts" class="btn btn-secondary">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      {{ t('sidebar.alerts') }}
+    </a>
+  </div>
 </div>
 
 <div class="cards">
@@ -36,6 +46,13 @@
     </div>
     <div class="label">{{ t('dashboard.messages_24h') }}</div>
     <div class="value">{{ metrics.messages_24h }}</div>
+    {% if metrics.messages_7d > 0 %}
+    {% set avg_7d = metrics.messages_7d / 7 %}
+    <div class="delta {% if metrics.messages_24h >= avg_7d %}up{% else %}down{% endif %}">
+      {% if metrics.messages_24h >= avg_7d %}▲{% else %}▼{% endif %}
+      vs 7日平均 {{ "%.0f"|format(avg_7d) }}
+    </div>
+    {% endif %}
   </div>
   <div class="card">
     <div class="card-icon indigo">
@@ -239,41 +256,58 @@
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+function getChartThemeColors() {
+  var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  return {
+    text: isDark ? '#94a3b8' : '#64748b',
+    grid: isDark ? '#334155' : '#e2e8f0',
+    tooltipBg: isDark ? '#0f172a' : '#1e293b',
+  };
+}
+function makeChartOptions(extra) {
+  var colors = getChartThemeColors();
+  return Object.assign({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: colors.tooltipBg,
+        padding: 12,
+        cornerRadius: 8,
+        displayColors: false,
+        titleFont: { size: 12 },
+        bodyFont: { size: 13, weight: '600' },
+      }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: colors.text }, border: { display: false } },
+      y: { grid: { color: colors.grid }, ticks: { color: colors.text }, border: { display: false }, beginAtZero: true }
+    }
+  }, extra || {});
+}
+</script>
 {% if metrics.daily_rows %}
 <script>
 (function() {
-  const labels = [{% for row in metrics.daily_rows %}'{{ row.day[-5:] }}'{% if not loop.last %},{% endif %}{% endfor %}];
-  const data = [{% for row in metrics.daily_rows %}{{ row.count }}{% if not loop.last %},{% endif %}{% endfor %}];
-  const ctx = document.getElementById('dailyChart').getContext('2d');
+  if (typeof Chart === 'undefined') return;
+  var labels = [{% for row in metrics.daily_rows %}'{{ row.day[-5:] }}'{% if not loop.last %},{% endif %}{% endfor %}];
+  var data = [{% for row in metrics.daily_rows %}{{ row.count }}{% if not loop.last %},{% endif %}{% endfor %}];
+  var ctx = document.getElementById('dailyChart').getContext('2d');
   new Chart(ctx, {
     type: 'bar',
     data: {
       labels: labels,
       datasets: [{
         data: data,
-        backgroundColor: 'rgba(79, 70, 229, 0.7)',
-        hoverBackgroundColor: 'rgba(79, 70, 229, 0.9)',
-        borderRadius: 6,
+        backgroundColor: 'rgba(99, 102, 241, 0.75)',
+        hoverBackgroundColor: 'rgba(99, 102, 241, 0.95)',
+        borderRadius: 8,
         borderSkipped: false,
       }]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#0f172a',
-          padding: 10,
-          cornerRadius: 8,
-          displayColors: false,
-        }
-      },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: '#94a3b8' }, border: { display: false } },
-        y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8' }, border: { display: false }, beginAtZero: true }
-      }
-    }
+    options: makeChartOptions()
   });
 })();
 </script>
@@ -281,6 +315,7 @@
 {% if metrics.hourly_dist %}
 <script>
 (function() {
+  if (typeof Chart === 'undefined') return;
   var hours = [{% for row in metrics.hourly_dist %}{{ row.hour }}{% if not loop.last %},{% endif %}{% endfor %}];
   var counts = [{% for row in metrics.hourly_dist %}{{ row.count }}{% if not loop.last %},{% endif %}{% endfor %}];
   var labels = hours.map(function(h) { return h + ':00'; });
@@ -291,29 +326,13 @@
       labels: labels,
       datasets: [{
         data: counts,
-        backgroundColor: 'rgba(16, 185, 129, 0.7)',
-        hoverBackgroundColor: 'rgba(16, 185, 129, 0.9)',
-        borderRadius: 4,
+        backgroundColor: 'rgba(16, 185, 129, 0.75)',
+        hoverBackgroundColor: 'rgba(16, 185, 129, 0.95)',
+        borderRadius: 6,
         borderSkipped: false,
       }]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: '#0f172a',
-          padding: 10,
-          cornerRadius: 8,
-          displayColors: false,
-        }
-      },
-      scales: {
-        x: { grid: { display: false }, ticks: { color: '#94a3b8' }, border: { display: false } },
-        y: { grid: { color: '#f1f5f9' }, ticks: { color: '#94a3b8' }, border: { display: false }, beginAtZero: true }
-      }
-    }
+    options: makeChartOptions()
   });
 })();
 </script>

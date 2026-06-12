@@ -37,6 +37,13 @@
     <div class="label">分类失败</div>
     <div class="value">{{ status_counts.get('failed', 0) }}</div>
   </div>
+  <div class="card">
+    <div class="card-icon amber">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+    </div>
+    <div class="label">可合并重复</div>
+    <div class="value">{{ duplicate_stats.duplicate_rows }}</div>
+  </div>
 </div>
 
 <div class="panel" style="padding: 16px;">
@@ -52,9 +59,41 @@
         立即分类一批
       </button>
     </form>
-    <a class="btn btn-secondary" href="/settings">编辑分类提示词</a>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <form action="/urls/deduplicate" method="post" data-loading-form style="display: inline;">
+        <button type="submit" class="btn btn-secondary" data-loading-text="合并中...">规范化合并重复 URL</button>
+      </form>
+      <a class="btn btn-secondary" href="/settings">编辑分类提示词</a>
+    </div>
   </div>
 </div>
+
+{% if duplicate_stats.duplicate_groups %}
+<div class="panel" style="padding: 16px;">
+  <h3 style="margin-bottom: 12px;">重复 URL 候选 <span class="badge badge-amber">{{ duplicate_stats.duplicate_groups }} 组</span></h3>
+  <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 10px;">
+    按规范化 URL 合并：忽略 fragment、尾斜杠和 utm/fbclid/gclid 等追踪参数，保留出现次数、跨群记录和分类结果。
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>规范化 URL</th>
+        <th>重复数</th>
+        <th>示例</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in duplicate_stats.examples %}
+      <tr>
+        <td style="max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><code>{{ item.canonical_url }}</code></td>
+        <td>{{ item.count }}</td>
+        <td style="max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ item.examples | join(' / ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <div class="panel" style="padding: 16px;">
   <form method="get" action="/urls#url-list" class="form-vertical">

@@ -1,10 +1,16 @@
 <!doctype html>
-<html lang="{{ 'en' if get_lang(request) == 'en' else 'zh-CN' }}">
+<html lang="{{ 'en' if get_lang(request) == 'en' else 'zh-CN' }}" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}TG Monitor{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    (function() {
+      var theme = localStorage.getItem('tg-monitor-theme') || 'light';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -27,6 +33,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           {{ t('sidebar.chats') }}
         </a>
+        <a href="/join-targets" {% if request.url.path == '/join-targets' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/><path d="M3 4v16"/></svg>
+          {{ t('sidebar.join_targets') }}
+        </a>
         <a href="/messages" {% if request.url.path == '/messages' %}class="active"{% endif %}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           {{ t('sidebar.messages') }}
@@ -35,6 +45,10 @@
         <a href="/summaries" {% if request.url.path == '/summaries' %}class="active"{% endif %}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10h-10V2z"/><path d="M22 12A10 10 0 0 0 12 2v10h10z"/></svg>
           {{ t('sidebar.summaries') }}
+        </a>
+        <a href="/market-intel" {% if request.url.path == '/market-intel' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+          {{ t('sidebar.market_intel') }}
         </a>
         <a href="/urls" {% if request.url.path == '/urls' %}class="active"{% endif %}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
@@ -51,6 +65,26 @@
         <a href="/key-leads" {% if request.url.path == '/key-leads' %}class="active"{% endif %}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7h.01"/><path d="M10.5 21 3 13.5 11.5 5H20v8.5L11.5 22z"/><path d="m14 12 3 3"/><path d="m17 12-3 3"/></svg>
           {{ t('sidebar.key_leads') }}
+        </a>
+        <a href="/price-trends" {% if request.url.path == '/price-trends' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          {{ t('sidebar.price_trends') }}
+        </a>
+        <a href="/url-propagation" {% if request.url.path == '/url-propagation' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          {{ t('sidebar.url_propagation') }}
+        </a>
+        <a href="/duplicate-messages" {% if request.url.path == '/duplicate-messages' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          {{ t('sidebar.duplicate_messages') }}
+        </a>
+        <a href="/system-events" {% if request.url.path == '/system-events' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          {{ t('sidebar.system_events') }}
+        </a>
+        <a href="/daily-briefs" {% if request.url.path == '/daily-briefs' %}class="active"{% endif %}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          {{ t('sidebar.daily_briefs') }}
         </a>
         <div class="nav-section">{{ t('sidebar.alerts') }}</div>
         <a href="/alerts" {% if request.url.path == '/alerts' %}class="active"{% endif %}>
@@ -73,6 +107,10 @@
         <span style="color: #444;">|</span>
         <a href="/lang/en" {% if get_lang(request) == 'en' %}class="active"{% endif %}>EN</a>
       </div>
+      <button type="button" class="theme-toggle" id="themeToggle" onclick="toggleTheme()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        <span id="themeLabel">Light</span>
+      </button>
       <div class="sidebar-footer">{{ t('common.version') }}</div>
     </aside>
     <main class="content">
@@ -104,7 +142,17 @@
 
     document.addEventListener('submit', function(event) {
       var form = event.target;
-      if (!form || !form.matches('[data-loading-form]')) {
+      if (!form || !form.matches('form')) {
+        return;
+      }
+      if ((form.getAttribute('method') || 'get').toLowerCase() === 'post' && !form.querySelector('input[name="csrf_token"]')) {
+        var csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = readCookie('csrf_token');
+        form.appendChild(csrfInput);
+      }
+      if (!form.matches('[data-loading-form]')) {
         return;
       }
       var button = event.submitter || form.querySelector('button[type="submit"]');
@@ -114,8 +162,48 @@
       var loadingText = button.getAttribute('data-loading-text') || '处理中...';
       button.disabled = true;
       button.setAttribute('aria-busy', 'true');
-      button.innerHTML = '<span class="button-spinner" aria-hidden="true"></span><span>' + loadingText + '</span>';
+      button.replaceChildren();
+      var spinner = document.createElement('span');
+      spinner.className = 'button-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      var label = document.createElement('span');
+      label.textContent = loadingText;
+      button.appendChild(spinner);
+      button.appendChild(label);
     });
+
+    function readCookie(name) {
+      var prefix = name + '=';
+      var parts = document.cookie ? document.cookie.split(';') : [];
+      for (var i = 0; i < parts.length; i++) {
+        var part = parts[i].trim();
+        if (part.indexOf(prefix) === 0) {
+          return decodeURIComponent(part.slice(prefix.length));
+        }
+      }
+      return '';
+    }
+
+    function toggleTheme() {
+      var html = document.documentElement;
+      var current = html.getAttribute('data-theme') || 'light';
+      var next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('tg-monitor-theme', next);
+      updateThemeLabel(next);
+    }
+
+    function updateThemeLabel(theme) {
+      var label = document.getElementById('themeLabel');
+      if (label) {
+        label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+      }
+    }
+
+    (function() {
+      var theme = document.documentElement.getAttribute('data-theme') || 'light';
+      updateThemeLabel(theme);
+    })();
   </script>
   {% block scripts %}{% endblock %}
 </body>
