@@ -15,6 +15,7 @@ from telethon.tl.functions.messages import CheckChatInviteRequest, ImportChatInv
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import User, Channel, Chat
 from sqlalchemy import select, func, or_
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from . import analysis_advanced
 from .ai_service import extract_urls_from_text, run_key_lead_analysis_once, run_summary_for_chat, run_url_classification_once, upsert_discovered_urls
@@ -676,24 +677,31 @@ class TelegramCollector:
             results = getattr(reactions, 'results', [])
             if not results:
                 return
+
+            reaction_counts: dict[str, int] = {}
             for r in results:
-                emoticon = None
                 count = getattr(r, 'count', 0)
                 reaction = getattr(r, 'reaction', None)
-                if reaction:
-                    emoticon = getattr(reaction, 'emoticon', None)
-                if not emoticon:
-                    emoticon = 'like'
-                existing = db.execute(
-                    select(MessageReaction).where(
-                        MessageReaction.message_id == message_id,
-                        MessageReaction.reaction_type == emoticon,
+                reaction_type = getattr(reaction, 'emoticon', None) if reaction else None
+                if not reaction_type and reaction:
+                    document_id = getattr(reaction, 'document_id', None)
+                    reaction_type = f'custom:{document_id}' if document_id else reaction.__class__.__name__
+                reaction_type = str(reaction_type or 'like')[:100]
+                reaction_counts[reaction_type] = max(reaction_counts.get(reaction_type, 0), count or 0)
+
+            now = datetime.utcnow()
+            with db.begin_nested():
+                for reaction_type, count in reaction_counts.items():
+                    stmt = mysql_insert(MessageReaction).values(
+                        message_id=message_id,
+                        reaction_type=reaction_type,
+                        count=count,
+                        updated_at=now,
                     )
-                ).scalar_one_or_none()
-                if existing:
-                    existing.count = count
-                else:
-                    db.add(MessageReaction(message_id=message_id, reaction_type=emoticon, count=count))
+                    db.execute(stmt.on_duplicate_key_update(
+                        count=stmt.inserted.count,
+                        updated_at=now,
+                    ))
         except Exception as exc:
             logger.warning('record reactions failed msg=%s: %s', message_id, exc)
 

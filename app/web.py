@@ -160,7 +160,15 @@ async def _check_csrf(request: Request) -> bool:
     if not cookie_token:
         return False
     submitted_token = request.headers.get('x-csrf-token', '')
+    if submitted_token and secrets.compare_digest(cookie_token, submitted_token):
+        return True
+
     try:
+        # BaseHTTPMiddleware passes a wrapped receive channel downstream. Calling
+        # request.form() directly consumes that stream without caching the body,
+        # so FastAPI Form(...) parameters later see an empty payload and fall
+        # back to defaults. Cache the body first so Starlette can replay it.
+        await request.body()
         form = await request.form()
         submitted_token = str(form.get(_CSRF_FORM_FIELD, '')) or submitted_token
     except Exception:
