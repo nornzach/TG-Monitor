@@ -536,15 +536,28 @@ class TelegramCollector:
         return count
 
     async def backfill_all_active_chats(self) -> None:
-        client = await telegram_session_manager.connect()
+        try:
+            client = await telegram_session_manager.connect()
+        except Exception as exc:
+            logger.warning('backfill connect failed: %s', exc)
+            return
         if not client:
             return
         with session_scope() as db:
             chats = db.execute(select(MonitoredChat).where(MonitoredChat.is_active.is_(True))).scalars().all()
         for chat in chats:
             try:
-                await self._backfill_one(chat.telegram_id)
+                await asyncio.wait_for(
+                    self._backfill_one(chat.telegram_id),
+                    timeout=settings.telegram_backfill_chat_timeout_seconds,
+                )
                 await asyncio.sleep(0.3)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    'backfill chat %s timed out after %s seconds',
+                    chat.telegram_id,
+                    settings.telegram_backfill_chat_timeout_seconds,
+                )
             except (sqlite3.OperationalError, Exception) as exc:
                 logger.warning('backfill chat %s failed: %s', chat.telegram_id, exc)
                 if isinstance(exc, sqlite3.OperationalError) and 'database is locked' in str(exc):
@@ -600,6 +613,9 @@ class TelegramCollector:
                 logger.warning('session locked during backfill chat %s, will retry later', telegram_chat_id)
                 await telegram_session_manager._reset_session_file()
             self._mark_sync_failed(run_id, exc)
+            raise
+        except asyncio.CancelledError:
+            self._mark_sync_failed(run_id, RuntimeError('backfill cancelled or timed out'))
             raise
         except Exception as exc:
             self._mark_sync_failed(run_id, exc)

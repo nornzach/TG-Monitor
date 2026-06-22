@@ -35,19 +35,22 @@ class TelegramSessionManager:
         return self._read_session_metadata()
 
     async def get_client(self) -> TelegramClient | None:
-        async with self._lock:
-            if self.client and await self._maybe_await(self.client.is_connected()):
+        await self._acquire_lock('get telegram client')
+        try:
+            if self.client and await self._wait_for_maybe(self.client.is_connected(), operation='check existing client connection'):
                 try:
-                    if await self._maybe_await(self.client.is_user_authorized()):
+                    if await self._wait_for_maybe(self.client.is_user_authorized(), operation='check existing client authorization'):
                         return self.client
                 except Exception:
                     self.client = None
             return None
+        finally:
+            self._lock.release()
 
     async def _disconnect_existing(self) -> None:
         if self.client:
             try:
-                await asyncio.wait_for(self.client.disconnect(), timeout=5)
+                await self._wait_for_telegram_io(self.client.disconnect(), operation='disconnect existing client', timeout=5)
             except asyncio.TimeoutError:
                 logger.warning('timeout disconnecting existing client')
             except Exception:
@@ -74,8 +77,9 @@ class TelegramSessionManager:
         return None
 
     async def connect(self, allow_desktop_import: bool = False) -> TelegramClient | None:
-        async with self._lock:
-            if self.client and await self._maybe_await(self.client.is_connected()):
+        await self._acquire_lock('connect telegram session')
+        try:
+            if self.client and await self._wait_for_maybe(self.client.is_connected(), operation='check existing client connection'):
                 return self.client
 
             await self._disconnect_existing()
@@ -110,6 +114,8 @@ class TelegramSessionManager:
 
             logger.warning('telegram session is not ready yet')
             return None
+        finally:
+            self._lock.release()
 
     async def _try_existing_session(self) -> TelegramClient | None:
         if not settings.resolved_session_path.exists():
@@ -129,13 +135,24 @@ class TelegramSessionManager:
                 logger.warning('no API credentials available for session file')
                 return None
 
-        client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False, proxy=self._proxy())
-        await client.connect()
-        if await self._maybe_await(client.is_user_authorized()):
-            logger.info('reused existing session file')
-            return client
-        await client.disconnect()
-        return None
+        client = TelegramClient(
+            str(settings.resolved_session_path),
+            api_id=api_id,
+            api_hash=api_hash,
+            receive_updates=False,
+            proxy=self._proxy(),
+            timeout=self._client_timeout(),
+        )
+        try:
+            await self._wait_for_telegram_io(client.connect(), operation='connect existing session')
+            if await self._wait_for_maybe(client.is_user_authorized(), operation='check existing session authorization'):
+                logger.info('reused existing session file')
+                return client
+            await self._disconnect_client(client, operation='disconnect unauthorized session')
+            return None
+        except (Exception, asyncio.CancelledError):
+            await self._disconnect_client(client, operation='disconnect failed session')
+            raise
 
     async def _connect_from_desktop(self) -> TelegramClient:
         from opentele.td import TDesktop
@@ -162,8 +179,8 @@ class TelegramSessionManager:
                     tdesktop = TDesktop(str(candidate), **kwargs)
                     client = await tdesktop.ToTelethon(str(settings.resolved_session_path), CreateNewSession)
                     try:
-                        await client.connect()
-                        if not await self._maybe_await(client.is_user_authorized()):
+                        await self._wait_for_telegram_io(client.connect(), operation='connect imported desktop session')
+                        if not await self._wait_for_maybe(client.is_user_authorized(), operation='check imported desktop session authorization'):
                             raise RuntimeError('desktop session imported but authorization is invalid')
                         logger.info(
                             'desktop session imported from %s with keyfile=%s mode=%s',
@@ -174,7 +191,7 @@ class TelegramSessionManager:
                         self._write_session_metadata('desktop_create_new')
                         return client
                     except BaseException:
-                        await client.disconnect()
+                        await self._disconnect_client(client, operation='disconnect failed desktop session')
                         raise
                 except BaseException as exc:
                     last_error = exc
@@ -193,7 +210,14 @@ class TelegramSessionManager:
             await self._disconnect_pending_manual_login()
             api_id, api_hash = self._resolve_api_credentials()
             settings.resolved_session_path.parent.mkdir(parents=True, exist_ok=True)
-            client = TelegramClient(str(settings.resolved_session_path), api_id=api_id, api_hash=api_hash, receive_updates=False, proxy=self._proxy())
+            client = TelegramClient(
+                str(settings.resolved_session_path),
+                api_id=api_id,
+                api_hash=api_hash,
+                receive_updates=False,
+                proxy=self._proxy(),
+                timeout=self._client_timeout(),
+            )
             try:
                 await client.connect()
                 sent_code = await client.send_code_request(phone)
@@ -239,10 +263,49 @@ class TelegramSessionManager:
             return await value
         return value
 
+    async def _acquire_lock(self, operation: str) -> None:
+        timeout = settings.telegram_connect_timeout_seconds
+        if timeout and timeout > 0:
+            try:
+                await asyncio.wait_for(self._lock.acquire(), timeout=timeout)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f'{operation} timed out waiting for session lock after {timeout} seconds') from exc
+        else:
+            await self._lock.acquire()
+
+    async def _wait_for_telegram_io(self, awaitable, *, operation: str, timeout: float | None = None):
+        if timeout is None:
+            timeout = settings.telegram_connect_timeout_seconds
+        if timeout and timeout > 0:
+            try:
+                return await asyncio.wait_for(awaitable, timeout=timeout)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(f'{operation} timed out after {timeout} seconds') from exc
+        return await awaitable
+
+    async def _wait_for_maybe(self, value, *, operation: str):
+        if asyncio.iscoroutine(value):
+            return await self._wait_for_telegram_io(value, operation=operation)
+        return value
+
+    def _client_timeout(self) -> int:
+        timeout = settings.telegram_connect_timeout_seconds
+        if timeout and timeout > 0:
+            return max(1, int(timeout))
+        return 10
+
+    async def _disconnect_client(self, client: TelegramClient, *, operation: str) -> None:
+        try:
+            await self._wait_for_telegram_io(client.disconnect(), operation=operation, timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning('%s timed out', operation)
+        except Exception:
+            pass
+
     async def _disconnect_pending_manual_login(self) -> None:
         if self._manual_login_client:
             try:
-                await self._manual_login_client.disconnect()
+                await self._disconnect_client(self._manual_login_client, operation='disconnect pending manual login')
             except Exception:
                 pass
         self._manual_login_client = None

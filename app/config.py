@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     telegram_api_hash: str | None = None
     telegram_proxy_host: str = ''
     telegram_proxy_port: int = 0
+    telegram_connect_timeout_seconds: float = 20
+    telegram_backfill_chat_timeout_seconds: float = 180
 
     analysis_top_keywords: int = 30
     sync_batch_size: int = 200

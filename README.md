@@ -164,6 +164,8 @@ Select provider, enter API Key, adjust Base URL and model as needed.
 | `TELEGRAM_LIVE_LISTENER_ENABLED` | false | Real-time message listener |
 | `TELEGRAM_DOWNLOAD_MEDIA_ENABLED` | false | Download media files |
 | `TELEGRAM_FETCH_USER_ABOUT_ENABLED` | false | Fetch user bio on first encounter |
+| `TELEGRAM_CONNECT_TIMEOUT_SECONDS` | 20 | Timeout for Telegram session connect/reuse operations |
+| `TELEGRAM_BACKFILL_CHAT_TIMEOUT_SECONDS` | 180 | Timeout for one chat during scheduled backfill |
 | `SYNC_INTERVAL_MINUTES` | 5 | Backfill interval (minutes) |
 | `SYNC_BATCH_SIZE` | 200 | Incremental sync batch size |
 | `SYNC_LOOKBACK_MESSAGES` | 1000 | First-time backfill message count |
