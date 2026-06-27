@@ -119,6 +119,16 @@ class MessageKeyword(Base):
     message: Mapped[Message] = relationship('Message', back_populates='keywords')
 
 
+class KeywordSummary(Base):
+    """Pre-aggregated keyword weights for fast dashboard queries."""
+    __tablename__ = 'keyword_summary'
+    __table_args__ = (Index('idx_keyword_summary_weight', 'total_weight'),)
+
+    keyword: Mapped[str] = mapped_column(String(100), primary_key=True)
+    total_weight: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class SyncRun(Base):
     __tablename__ = 'sync_runs'
 
@@ -559,4 +569,27 @@ class DailyMarketBrief(Base):
     risk_level: Mapped[str] = mapped_column(String(20), default='low')
     price_moves_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     generated_by: Mapped[str] = mapped_column(String(50), default='ai')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ChatSession(Base):
+    __tablename__ = 'chat_sessions'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), default='新对话')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey('chat_sessions.id', ondelete='CASCADE'), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tool_input: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_output: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

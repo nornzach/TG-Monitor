@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -23,17 +23,33 @@ from sqlalchemy import select, desc, func, or_, case
 from . import analysis
 from . import analysis_advanced
 from .analysis import dashboard_metrics, chat_statistics, system_status
+from .dashboard import (
+    dashboard_activity_cached,
+    dashboard_ai_stats_cached,
+    dashboard_overview_cached,
+    dashboard_sync_status_cached,
+    dashboard_top_chats_cached,
+    dashboard_top_keywords_cached,
+    dashboard_top_senders_cached,
+)
+from .ai_chat import (
+    get_chat_history,
+    get_or_create_chat_session,
+    get_recent_sessions,
+    run_chat_turn,
+    stream_chat_answer,
+)
 from .ai_service import PROVIDER_CONFIGS, deduplicate_existing_urls, get_ai_provider_config, get_url_classification_prompt, normalize_url_for_dedup, run_key_lead_analysis_once, run_summary_now, run_url_classification_once, url_duplicate_stats
 from .collector import collector
 from .config import settings, BASE_DIR
-from .db import init_database, session_scope
+from .db import init_database, session_scope, SessionLocal
 from .join_targets import JOIN_STATUS_KEYS, discover_join_targets_from_collected_data, enqueue_join_targets, sync_join_targets_with_monitored_chats
 from .market_brief import generate_daily_brief
 from .models import (
     MonitoredChat, Message, TelegramUser, SyncRun, AppSetting, AiSummary,
     AiUrl, AiUrlCategory, AiUrlClassificationRun, AiProduct, AiContact,
     AiKeyLead, AiKeyLeadRun, AlertRule, AlertMatch, TelegramJoinTarget,
-    SystemEvent, DailyMarketBrief,
+    SystemEvent, DailyMarketBrief, ChatSession, ChatMessage,
 )
 from .telegram_client import telegram_session_manager
 
@@ -195,6 +211,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if request.method == 'GET' and not request.cookies.get(_CSRF_COOKIE_NAME):
                 _set_csrf_cookie(response, request)
             return response
+
+        # Web UI API routes — used by the browser, allow cookie auth + CSRF.
+        if path.startswith('/api/chat/') or path.startswith('/api/dashboard/'):
+            if _check_api_sk(request):
+                return await call_next(request)
+            if _check_auth_cookie(request):
+                if request.method in _UNSAFE_METHODS and not await _check_csrf(request):
+                    return JSONResponse({'error': 'CSRF validation failed'}, status_code=403)
+                response = await call_next(request)
+                if not request.cookies.get(_CSRF_COOKIE_NAME):
+                    _set_csrf_cookie(response, request)
+                return response
+            return JSONResponse(
+                {'error': 'Unauthorized', 'message': 'Missing or invalid authentication'},
+                status_code=401,
+            )
 
         # API routes — check X-API-Key header
         if path.startswith('/api/'):
@@ -636,16 +668,11 @@ def _migrate_existing_urls() -> None:
 
 @app.get('/', response_class=HTMLResponse)
 def dashboard(request: Request):
-    with session_scope() as db:
-        metrics = dashboard_metrics(db)
-        recent_runs = db.execute(select(SyncRun).order_by(SyncRun.id.desc()).limit(10)).scalars().all()
     return templates.TemplateResponse(
         request=request,
         name='dashboard.html',
         context={
             'request': request,
-            'metrics': metrics,
-            'recent_runs': recent_runs,
             'session_mode': settings.telegram_session_mode,
             'msg': request.query_params.get('msg', ''),
             'level': request.query_params.get('level', 'info'),
@@ -1647,6 +1674,48 @@ def status_page(request: Request):
 def dashboard_api():
     with session_scope() as db:
         return JSONResponse(dashboard_metrics(db))
+
+
+@app.get('/api/dashboard/overview')
+def dashboard_overview_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_overview_cached(db))
+
+
+@app.get('/api/dashboard/activity')
+def dashboard_activity_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_activity_cached(db))
+
+
+@app.get('/api/dashboard/top-chats')
+def dashboard_top_chats_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_top_chats_cached(db))
+
+
+@app.get('/api/dashboard/top-senders')
+def dashboard_top_senders_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_top_senders_cached(db))
+
+
+@app.get('/api/dashboard/top-keywords')
+def dashboard_top_keywords_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_top_keywords_cached(db))
+
+
+@app.get('/api/dashboard/ai-stats')
+def dashboard_ai_stats_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_ai_stats_cached(db))
+
+
+@app.get('/api/dashboard/sync-status')
+def dashboard_sync_status_api():
+    with session_scope() as db:
+        return JSONResponse(dashboard_sync_status_cached(db))
 
 
 # ==================== Products Page ====================
@@ -2702,3 +2771,108 @@ def daily_brief_latest_api():
         'risk_level': row.risk_level,
         'price_moves_json': row.price_moves_json,
     })
+
+
+
+# ==================== AI Chat ====================
+
+
+@app.get('/chat', response_class=HTMLResponse)
+def chat_page(request: Request, session_id: int | None = None):
+    user_id = request.cookies.get('auth_token', 'anonymous')[:64]
+    with session_scope() as db:
+        session = get_or_create_chat_session(db, session_id, user_id)
+        sessions = get_recent_sessions(db, user_id)
+        history = get_chat_history(db, session.id)
+    return templates.TemplateResponse(
+        request=request,
+        name='chat.html',
+        context={
+            'request': request,
+            'session': session,
+            'sessions': sessions,
+            'history': history,
+        },
+    )
+
+
+@app.get('/api/chat/sessions')
+def chat_sessions_api(request: Request):
+    user_id = request.cookies.get('auth_token', 'anonymous')[:64]
+    with session_scope() as db:
+        sessions = get_recent_sessions(db, user_id)
+    return JSONResponse({'sessions': [
+        {
+            'id': s.id,
+            'title': s.title,
+            'created_at': s.created_at.isoformat() if s.created_at else None,
+            'updated_at': s.updated_at.isoformat() if s.updated_at else None,
+        }
+        for s in sessions
+    ]})
+
+
+@app.post('/api/chat')
+async def chat_api(request: Request):
+    """Non-streaming chat endpoint (fallback)."""
+    data = await request.json()
+    question = (data.get('question') or '').strip()
+    session_id = data.get('session_id')
+    if not question:
+        return JSONResponse({'error': '问题不能为空'}, status_code=400)
+    if len(question) > 2000:
+        return JSONResponse({'error': '问题长度不能超过 2000 个字符'}, status_code=400)
+
+    user_id = request.cookies.get('auth_token', 'anonymous')[:64]
+    db = SessionLocal()
+    try:
+        session = get_or_create_chat_session(db, session_id, user_id)
+        history = get_chat_history(db, session.id)
+        content, tool_calls = await run_chat_turn(db, session.id, question, history)
+        return JSONResponse({
+            'session_id': session.id,
+            'answer': content,
+            'tools': tool_calls,
+        })
+    except ValueError as exc:
+        return JSONResponse({'error': str(exc)}, status_code=400)
+    except RuntimeError as exc:
+        logger.warning('chat_api runtime error: %s', exc)
+        return JSONResponse({'error': str(exc)}, status_code=500)
+    except Exception as exc:
+        logger.exception('chat_api failed')
+        return JSONResponse({'error': 'AI 处理失败，请稍后重试'}, status_code=500)
+    finally:
+        db.close()
+
+
+@app.post('/api/chat/stream')
+async def chat_stream_api(request: Request):
+    """Server-Sent Events streaming chat endpoint."""
+    data = await request.json()
+    question = (data.get('question') or '').strip()
+    session_id = data.get('session_id')
+    if not question:
+        return JSONResponse({'error': '问题不能为空'}, status_code=400)
+    if len(question) > 2000:
+        return JSONResponse({'error': '问题长度不能超过 2000 个字符'}, status_code=400)
+
+    user_id = request.cookies.get('auth_token', 'anonymous')[:64]
+
+    async def event_generator():
+        try:
+            async for chunk in stream_chat_answer(user_id, session_id, question):
+                yield chunk
+        except Exception as exc:
+            logger.exception('chat_stream_api event generator failed')
+            yield f'event: error\ndata: {json.dumps({"message": "AI 处理失败，请稍后重试"}, ensure_ascii=False)}\n\n'
+            yield f'event: done\ndata: {json.dumps({"ok": False}, ensure_ascii=False)}\n\n'
+
+    return StreamingResponse(
+        event_generator(),
+        media_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )

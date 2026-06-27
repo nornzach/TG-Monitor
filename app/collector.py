@@ -24,6 +24,7 @@ from .content_fingerprint import save_fingerprint
 from .db import session_scope
 from .join_targets import discover_join_targets_from_collected_data, normalize_join_target, sync_join_targets_with_monitored_chats
 from .market_brief import generate_daily_brief
+from .dashboard import refresh_keyword_summary
 from .models import (
     MonitoredChat, TelegramJoinTarget, TelegramUser, Message, MessageKeyword,
     SyncRun, AppSetting, AiSummary, MessageEdit, MessageReaction,
@@ -52,6 +53,25 @@ class TelegramCollector:
     async def start(self) -> None:
         if self.started:
             return
+
+        def _refresh_keyword_summary_job():
+            try:
+                with session_scope() as db:
+                    count = refresh_keyword_summary(db)
+                    logger.info('keyword_summary refreshed: %d rows', count)
+            except Exception as exc:
+                logger.exception('keyword_summary refresh failed: %s', exc)
+
+        self.scheduler.add_job(
+            _refresh_keyword_summary_job,
+            'interval',
+            hours=1,
+            id='refresh_keyword_summary',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
         if settings.telegram_background_collection_enabled:
             if settings.telegram_live_listener_enabled:
                 client = await telegram_session_manager.connect()

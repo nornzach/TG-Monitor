@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}AI 数据助手 - TG Monitor{% endblock %}
+{% block content %}
+<div class="chat-layout">
+  <aside class="chat-sidebar">
+    <div class="chat-sidebar-header">
+      <h3>会话历史</h3>
+      <a href="/chat" class="btn btn-primary btn-sm">新对话</a>
+    </div>
+    <div class="chat-sessions" id="chatSessions">
+      {% for s in sessions %}
+      <a href="/chat?session_id={{ s.id }}" class="chat-session-item {% if session and session.id == s.id %}active{% endif %}" title="{{ s.title }}">
+        <div class="session-title">{{ s.title or '新对话' }}</div>
+        <div class="session-time">{{ s.updated_at | to_beijing }}</div>
+      </a>
+      {% endfor %}
+    </div>
+  </aside>
+  <div class="chat-main">
+    <div class="chat-header">
+      <h2>AI 数据助手</h2>
+      <div class="chat-desc">询问当前监控数据，AI 会自动查询数据库并返回答案</div>
+    </div>
+    <div class="chat-messages" id="chatMessages">
+      {% if not history %}
+      <div class="chat-empty-state" id="chatEmptyState">
+        <div class="empty-icon">🤖</div>
+        <h3>AI 数据助手</h3>
+        <p>我可以帮你查询当前监控数据中的信息，实时展示查询过程与结果。</p>
+        <div class="example-questions">
+          <div class="example-label">试试这样问：</div>
+          <button type="button" class="quick-chip" data-question="过去 24 小时哪个群消息最多？">过去 24 小时哪个群消息最多？</button>
+          <button type="button" class="quick-chip" data-question="最近 7 天有哪些新的 Key 商线索？">最近 7 天有哪些新的 Key 商线索？</button>
+          <button type="button" class="quick-chip" data-question="昨天提到最多的前 10 个关键词是什么？">昨天提到最多的前 10 个关键词是什么？</button>
+          <button type="button" class="quick-chip" data-question="最近 7 天商品价格有什么变化？">最近 7 天商品价格有什么变化？</button>
+        </div>
+      </div>
+      {% endif %}
+      {% for msg in history %}
+        {% if msg.role == 'user' %}
+        <div class="chat-message user-message">
+          <div class="message-bubble">
+            <div class="message-content">{{ msg.content }}</div>
+          </div>
+        </div>
+        {% elif msg.role == 'assistant' %}
+        <div class="chat-message ai-message">
+          <div class="message-avatar">AI</div>
+          <div class="message-bubble">
+            <div class="message-content">{{ msg.content }}</div>
+          </div>
+        </div>
+        {% elif msg.role == 'tool' %}
+        <div class="chat-message ai-message tool-history-message">
+          <div class="message-avatar">🔧</div>
+          <div class="message-bubble">
+            <div class="message-tools">
+              <div class="tool-item done">
+                <div class="tool-header">
+                  <span class="tool-status-icon done">✓</span>
+                  <span class="tool-name">{{ msg.tool_name or '工具' }}</span>
+                </div>
+                {% if msg.tool_input %}
+                <pre class="tool-input">{{ msg.tool_input }}</pre>
+                {% endif %}
+                {% if msg.tool_output %}
+                <pre class="tool-output">{{ msg.tool_output }}</pre>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <div class="chat-input-area">
+      <div class="quick-questions">
+        <button type="button" class="quick-chip" data-question="过去 24 小时哪个群消息最多？">过去 24h 消息最多的群</button>
+        <button type="button" class="quick-chip" data-question="最近 7 天有哪些新的 Key 商线索？">最近 Key 商线索</button>
+        <button type="button" class="quick-chip" data-question="昨天提到最多的前 10 个关键词是什么？">昨日热词 TOP10</button>
+        <button type="button" class="quick-chip" data-question="最近 7 天商品价格有什么变化？">近 7 天价格变化</button>
+      </div>
+      <form class="chat-form" id="chatForm">
+        <input type="hidden" id="sessionId" value="{{ session.id if session else '' }}">
+        <div class="chat-input-wrap">
+          <textarea
+            id="chatInput"
+            class="chat-input"
+            rows="1"
+            maxlength="2000"
+            placeholder="输入问题，例如：过去 24 小时哪个群消息最多？"
+            required
+          ></textarea>
+          <div class="input-actions">
+            <button type="button" class="btn btn-danger chat-stop" id="stopBtn" style="display:none;" title="停止生成">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <button type="submit" class="btn btn-primary chat-send" id="sendBtn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+      </form>
+      <div class="chat-status" id="chatStatus"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/lib/marked.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.5/dist/purify.min.js"></script>
+<script src="/static/chat.js"></script>
+{% endblock %}

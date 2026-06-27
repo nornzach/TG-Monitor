@@ -13,3 +13,4 @@ apscheduler==3.11.2
 jieba==0.42.1
 openai==1.85.0
 anthropic==0.52.0
+pydantic-ai==0.0.40

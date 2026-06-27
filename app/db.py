@@ -24,6 +24,7 @@ def init_database() -> None:
         MessageEdit, MessageReaction, MessageFingerprint, MessageViewsHistory,
         UserDailyStat, ProductPriceHistory, MarketIntelligenceItem, UrlMetadata,
         SummaryUrl, DailyChatStat, SystemEvent, DailyMarketBrief,
+        ChatSession, ChatMessage,
     )  # noqa
     Base.metadata.create_all(bind=engine)
     ensure_runtime_indexes()
