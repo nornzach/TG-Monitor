@@ -15,6 +15,7 @@ A local Telegram group/channel monitoring system with AI-powered analysis. Colle
 | Category | Feature |
 |----------|---------|
 | **Message Collection** | Auto/manual backfill of Telegram group/channel history, real-time listener |
+| **Multi-account** | Independent sessions, listeners, chat routing, and least-loaded auto-join across Telegram accounts |
 | **AI Analysis** | Multi-provider AI (DeepSeek / OpenAI / Claude / custom) generates summaries, extracts URLs, products, and contacts |
 | **Web Dashboard** | Responsive UI with interactive Chart.js charts, keyword clouds, activity rankings |
 | **URL Classification** | Auto-categorizes URLs into relay / seller / other with reputation scoring |
@@ -33,7 +34,7 @@ A local Telegram group/channel monitoring system with AI-powered analysis. Colle
 
 - Python 3.11+
 - MySQL 5.7+ or 8.0+
-- A Telegram account
+- One or more Telegram accounts
 
 ### 1. Clone & Install
 
@@ -81,6 +82,14 @@ python -m app.cli manual-login --phone +8613xxxxxxxxx
 ```
 
 The system will send a verification code to your Telegram. Enter it via the web UI at `/settings` or re-run the command with `--code`.
+
+For multiple accounts, configure distinct session files and log in each account by its zero-based index:
+
+```bash
+export TELEGRAM_SESSION_PATHS=./data/tg-1.session,./data/tg-2.session
+python -m app.cli manual-login --account 0 --phone +8613xxxxxxxxx
+python -m app.cli manual-login --account 1 --phone +8615xxxxxxxxx
+```
 
 ### 5. Sync Groups
 
@@ -154,6 +163,7 @@ Select provider, enter API Key, adjust Base URL and model as needed.
 | `TELEGRAM_API_ID` | — | API ID from https://my.telegram.org (optional) |
 | `TELEGRAM_API_HASH` | — | API Hash (optional) |
 | `TELEGRAM_SESSION_PATH` | ./data/telethon.session | Session file path |
+| `TELEGRAM_SESSION_PATHS` | — | Comma-separated session paths; enables multiple accounts and replaces `TELEGRAM_SESSION_PATH` |
 | `TELEGRAM_SESSION_MODE` | manual | `manual` (recommended) or `existing` |
 
 ### Collection
@@ -300,6 +310,7 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 | 分类 | 功能 |
 |------|------|
 | **消息采集** | 自动/手动回填 Telegram 群组历史，实时监听新消息 |
+| **多账号** | 多个 Telegram Session 独立连接、监听、群组路由，自动加群选择负载最低账号 |
 | **AI 分析** | 多服务商 AI（DeepSeek / OpenAI / Claude / 自定义）生成摘要、提取 URL、商品、联系方式 |
 | **Web 仪表盘** | 响应式 UI，Chart.js 交互图表、关键词云、活跃度排行 |
 | **URL 分类** | 自动分类为中转站/号商/其他，支持信誉评分 |
@@ -318,7 +329,7 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 - Python 3.11+
 - MySQL 5.7+ 或 8.0+
-- 一个 Telegram 账号
+- 一个或多个 Telegram 账号
 
 ### 1. 克隆 & 安装
 
@@ -366,6 +377,14 @@ python -m app.cli manual-login --phone +8613xxxxxxxxx
 ```
 
 系统会向你的 Telegram 发送验证码。通过 Web 界面 `/settings` 页面输入验证码完成登录，或重新运行命令并带上 `--code` 参数。
+
+多账号时，为每个账号配置独立 Session 文件，并按从 0 开始的账号序号分别登录：
+
+```bash
+export TELEGRAM_SESSION_PATHS=./data/tg-1.session,./data/tg-2.session
+python -m app.cli manual-login --account 0 --phone +8613xxxxxxxxx
+python -m app.cli manual-login --account 1 --phone +8615xxxxxxxxx
+```
 
 ### 5. 同步群组
 
@@ -439,6 +458,7 @@ python main.py
 | `TELEGRAM_API_ID` | — | API ID（可选，从 https://my.telegram.org 获取） |
 | `TELEGRAM_API_HASH` | — | API Hash（可选） |
 | `TELEGRAM_SESSION_PATH` | ./data/telethon.session | 会话文件路径 |
+| `TELEGRAM_SESSION_PATHS` | — | 逗号分隔的 Session 路径；启用多账号并覆盖 `TELEGRAM_SESSION_PATH` |
 | `TELEGRAM_SESSION_MODE` | manual | `manual`（推荐）或 `existing` |
 
 ### 采集

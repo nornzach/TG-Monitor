@@ -51,7 +51,7 @@ from .models import (
     AiKeyLead, AiKeyLeadRun, AlertRule, AlertMatch, TelegramJoinTarget,
     SystemEvent, DailyMarketBrief, ChatSession, ChatMessage,
 )
-from .telegram_client import telegram_session_manager
+from .telegram_client import get_telegram_session_manager, telegram_session_managers
 
 # ==================== i18n ====================
 
@@ -1028,8 +1028,18 @@ def messages_page(request: Request, chat_id: str | None = None, keyword: str | N
 
 @app.get('/settings', response_class=HTMLResponse)
 async def settings_page(request: Request):
-    session_metadata = telegram_session_manager.get_session_metadata()
-    me = session_metadata.get('account') if session_metadata else None
+    telegram_accounts = []
+    for index, manager in enumerate(telegram_session_managers):
+        session_metadata = manager.get_session_metadata()
+        telegram_accounts.append({
+            'index': index,
+            'label': manager.label,
+            'session_path': str(manager.session_path),
+            'connected': bool(manager.session_path.exists() and session_metadata),
+            'me': session_metadata.get('account') if session_metadata else None,
+            'pending_phone': manager.pending_manual_login_phone,
+            'group_count': manager.group_count,
+        })
 
     # Show opentele fallback credentials as available on the page
     api_id = settings.telegram_api_id
@@ -1101,10 +1111,10 @@ async def settings_page(request: Request):
             'database_port': settings.database_port,
             'database_name': settings.database_name,
             'tdata_path': str(settings.resolved_tdata_path),
-            'session_path': str(settings.resolved_session_path),
-            'telegram_connected': bool(settings.resolved_session_path.exists() and session_metadata),
-            'me': me,
-            'pending_manual_login_phone': telegram_session_manager.pending_manual_login_phone,
+            'session_path': ', '.join(account['label'] for account in telegram_accounts),
+            'telegram_connected': any(account['connected'] for account in telegram_accounts),
+            'telegram_connected_count': sum(account['connected'] for account in telegram_accounts),
+            'telegram_accounts': telegram_accounts,
             'api_id_present': bool(api_id),
             'api_hash_present': bool(api_hash),
             'ai_api_key_set': bool(ai_key_row and ai_key_row.value),
@@ -1120,16 +1130,23 @@ async def settings_page(request: Request):
 
 
 @app.post('/settings/manual-login')
-async def manual_login(request: Request, phone: str = Form(default=''), code: str = Form(default=''), password: str = Form(default='')):
+async def manual_login(
+    request: Request,
+    account: int = Form(default=0),
+    phone: str = Form(default=''),
+    code: str = Form(default=''),
+    password: str = Form(default=''),
+):
     try:
+        manager = get_telegram_session_manager(account)
         phone = phone.strip()
         code = code.strip()
         if not code:
             if not phone:
                 return redirect_with_message('/settings', _t(request, 'settings.enter_phone'), 'error')
-            await telegram_session_manager.start_manual_login(phone=phone)
+            await manager.start_manual_login(phone=phone)
             return redirect_with_message('/settings', _t(request, 'settings.code_sent'), 'success')
-        await telegram_session_manager.complete_manual_login(code=code, password=password or None)
+        await manager.complete_manual_login(code=code, password=password or None)
         return redirect_with_message('/settings', _t(request, 'settings.login_success'), 'success')
     except Exception as exc:
         logger.exception('manual login failed')
@@ -1137,11 +1154,11 @@ async def manual_login(request: Request, phone: str = Form(default=''), code: st
 
 
 @app.post('/settings/connect')
-async def connect_session(request: Request):
+async def connect_session(request: Request, account: int = Form(default=0)):
     if not settings.telegram_desktop_import_enabled:
         return redirect_with_message('/settings', _t(request, 'settings.desktop_import_disabled'), 'error')
     try:
-        client = await telegram_session_manager.connect(allow_desktop_import=True)
+        client = await get_telegram_session_manager(account).connect(allow_desktop_import=True)
         if client:
             return redirect_with_message('/settings', _t(request, 'settings.session_connected'), 'success')
         return redirect_with_message('/settings', _t(request, 'settings.session_connect_failed'), 'error')

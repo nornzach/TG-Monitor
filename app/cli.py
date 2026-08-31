@@ -7,11 +7,11 @@ import getpass
 from .collector import collector
 from .config import settings
 from .db import init_database
-from .telegram_client import telegram_session_manager
+from .telegram_client import get_telegram_session_manager
 
 
-async def import_desktop_session() -> None:
-    client = await telegram_session_manager.connect(allow_desktop_import=True)
+async def import_desktop_session(account: int) -> None:
+    client = await get_telegram_session_manager(account).connect(allow_desktop_import=True)
     if not client:
         raise RuntimeError('failed to connect using desktop session')
     me = await client.get_me()
@@ -28,13 +28,13 @@ async def backfill(chat_id: int, limit: int) -> None:
     print(f'backfilled messages: {total}')
 
 
-async def manual_login(phone: str, code: str | None, password: str | None) -> None:
+async def manual_login(account: int, phone: str, code: str | None, password: str | None) -> None:
     async def code_callback() -> str:
         if code:
             return code
         return input('Telegram code: ').strip()
 
-    await telegram_session_manager.manual_login(phone, code_callback, password=password)
+    await get_telegram_session_manager(account).manual_login(phone, code_callback, password=password)
     print('manual login success')
 
 
@@ -43,7 +43,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest='command', required=True)
 
     sub.add_parser('init-db')
-    sub.add_parser('import-desktop-session')
+    import_parser = sub.add_parser('import-desktop-session')
+    import_parser.add_argument('--account', default=0, type=int)
     sub.add_parser('sync-dialogs')
 
     backfill_parser = sub.add_parser('backfill')
@@ -54,6 +55,7 @@ def main() -> None:
     login_parser.add_argument('--phone', required=True)
     login_parser.add_argument('--code')
     login_parser.add_argument('--password')
+    login_parser.add_argument('--account', default=0, type=int)
 
     args = parser.parse_args()
     if args.command == 'init-db':
@@ -62,7 +64,7 @@ def main() -> None:
         return
     if args.command == 'import-desktop-session':
         init_database()
-        asyncio.run(import_desktop_session())
+        asyncio.run(import_desktop_session(args.account))
         return
     if args.command == 'sync-dialogs':
         init_database()
@@ -79,7 +81,7 @@ def main() -> None:
             print('A login code will be requested after the app sends it to Telegram.')
         if password == 'ASK':
             password = getpass.getpass('2FA password: ')
-        asyncio.run(manual_login(args.phone, args.code, password or None))
+        asyncio.run(manual_login(args.account, args.phone, args.code, password or None))
         return
 
 

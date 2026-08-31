@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     telegram_tdata_path: str = ''
     telegram_session_path: str = './data/telethon.session'
+    telegram_session_paths: str = ''
     telegram_session_mode: str = 'manual'  # existing|manual
     telegram_desktop_import_enabled: bool = False
     telegram_desktop_import_mode: str = 'create_new'
@@ -116,7 +117,17 @@ class Settings(BaseSettings):
 
     @property
     def resolved_session_path(self) -> Path:
-        path = Path(self.telegram_session_path)
+        return self._resolve_path(self.telegram_session_path)
+
+    @property
+    def resolved_session_paths(self) -> list[Path]:
+        raw_paths = [value.strip() for value in self.telegram_session_paths.split(',') if value.strip()]
+        paths = raw_paths or [self.telegram_session_path]
+        return list(dict.fromkeys(self._resolve_path(value) for value in paths))
+
+    @staticmethod
+    def _resolve_path(value: str) -> Path:
+        path = Path(value)
         if not path.is_absolute():
             path = BASE_DIR / path
         return path

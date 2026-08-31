@@ -30,7 +30,7 @@ from .models import (
     SyncRun, AppSetting, AiSummary, MessageEdit, MessageReaction,
     MessageViewsHistory, UserDailyStat, DailyChatStat,
 )
-from .telegram_client import telegram_session_manager
+from .telegram_client import get_telegram_session_manager, telegram_session_manager, telegram_session_managers
 from .text_utils import normalize_text, extract_keywords
 from .config import settings
 
@@ -41,8 +41,7 @@ class TelegramCollector:
     def __init__(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone='UTC')
         self.started = False
-        self.handler_registered = False
-        self._message_handler = None
+        self._message_handlers: dict[str, tuple[object, object]] = {}
         self._handler_lock = asyncio.Lock()
         self._backfill_semaphore = asyncio.Semaphore(1)
         self._backfill_locks: dict[int, asyncio.Lock] = {}
@@ -74,9 +73,7 @@ class TelegramCollector:
 
         if settings.telegram_background_collection_enabled:
             if settings.telegram_live_listener_enabled:
-                client = await telegram_session_manager.connect()
-                if client:
-                    await self._register_handler(client)
+                await self.ensure_connected()
             self.scheduler.add_job(self.ensure_connected, 'interval', minutes=1, id='ensure_connected', replace_existing=True)
             self.scheduler.add_job(
                 self.backfill_all_active_chats,
@@ -161,32 +158,41 @@ class TelegramCollector:
         await self._unregister_handler()
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
-        client = await telegram_session_manager.get_client()
-        if client:
-            await client.disconnect()
+        for manager in telegram_session_managers:
+            await manager.disconnect()
 
     async def ensure_connected(self) -> None:
         if not settings.telegram_live_listener_enabled:
             return
-        try:
-            client = await telegram_session_manager.connect()
-        except sqlite3.OperationalError as exc:
-            if 'database is locked' not in str(exc):
-                logger.warning('ensure_connected failed: %s', exc)
-                return
-            logger.warning('ensure_connected session sqlite lock: %s', exc)
-            await asyncio.sleep(2)
-            client = await telegram_session_manager.connect()
-        except Exception as exc:
-            logger.warning('ensure_connected failed: %s', exc)
-            return
-        if client and settings.telegram_live_listener_enabled and not self.handler_registered:
-            await self._register_handler(client)
+        for manager in telegram_session_managers:
+            try:
+                client = await manager.connect()
+            except sqlite3.OperationalError as exc:
+                if 'database is locked' not in str(exc):
+                    logger.warning('ensure_connected failed account=%s: %s', manager.label, exc)
+                    continue
+                logger.warning('ensure_connected session sqlite lock account=%s: %s', manager.label, exc)
+                await asyncio.sleep(2)
+                try:
+                    client = await manager.connect()
+                except Exception as retry_exc:
+                    logger.warning('ensure_connected retry failed account=%s: %s', manager.label, retry_exc)
+                    continue
+            except Exception as exc:
+                logger.warning('ensure_connected failed account=%s: %s', manager.label, exc)
+                continue
+            registered = self._message_handlers.get(manager.account_key)
+            if client and (not registered or registered[0] is not client):
+                await self._register_handler(manager, client)
 
-    async def _register_handler(self, client) -> None:
+    async def _register_handler(self, manager, client) -> None:
         async with self._handler_lock:
-            if self.handler_registered:
-                return
+            registered = self._message_handlers.pop(manager.account_key, None)
+            if registered:
+                try:
+                    registered[0].remove_event_handler(registered[1])
+                except Exception:
+                    logger.warning('failed to replace Telegram handler account=%s', manager.label, exc_info=True)
 
             @client.on(events.NewMessage())
             async def new_message_handler(event):
@@ -202,25 +208,18 @@ class TelegramCollector:
                 except Exception as exc:
                     logger.warning('new_message_handler failed: %s', exc)
 
-            self._message_handler = new_message_handler
-            self.handler_registered = True
-            logger.info('telegram new-message handler registered')
+            self._message_handlers[manager.account_key] = (client, new_message_handler)
+            logger.info('telegram new-message handler registered account=%s', manager.label)
 
     async def _unregister_handler(self) -> None:
         async with self._handler_lock:
-            if not self.handler_registered or not self._message_handler:
-                self.handler_registered = False
-                self._message_handler = None
-                return
-            client = await telegram_session_manager.get_client()
-            if client:
+            for account_key, (client, handler) in list(self._message_handlers.items()):
                 try:
-                    client.remove_event_handler(self._message_handler)
+                    client.remove_event_handler(handler)
                 except Exception:
-                    logger.warning('telegram new-message handler unregister failed', exc_info=True)
-            self.handler_registered = False
-            self._message_handler = None
-            logger.info('telegram new-message handler unregistered')
+                    logger.warning('telegram new-message handler unregister failed account=%s', account_key, exc_info=True)
+            self._message_handlers.clear()
+            logger.info('telegram new-message handlers unregistered')
 
     async def apply_runtime_config(self) -> None:
         if not settings.telegram_background_collection_enabled:
@@ -254,10 +253,8 @@ class TelegramCollector:
                     coalesce=True,
                 )
 
-            client = await telegram_session_manager.get_client()
             if settings.telegram_live_listener_enabled:
-                if client and not self.handler_registered:
-                    await self._register_handler(client)
+                await self.ensure_connected()
             else:
                 await self._unregister_handler()
 
@@ -404,10 +401,10 @@ class TelegramCollector:
             target.last_attempt_at = now
             target.last_error = None
 
-        client = await telegram_session_manager.connect()
+        manager, client = await self._least_loaded_account()
         if not client:
-            self._mark_join_target(target_id, 'failed', 'telegram session unavailable')
-            return {'status': 'failed', 'target_id': target_id, 'reason': 'telegram session unavailable'}
+            self._mark_join_target(target_id, 'failed', 'no Telegram account is available')
+            return {'status': 'failed', 'target_id': target_id, 'reason': 'no Telegram account is available'}
 
         try:
             entity = None
@@ -426,7 +423,9 @@ class TelegramCollector:
 
             if not isinstance(entity, (Channel, Chat)):
                 raise RuntimeError('joined but Telegram did not return a chat entity')
-            chat = self._activate_joined_chat(entity)
+            chat = self._activate_joined_chat(entity, manager.account_key)
+            if manager.group_count is not None:
+                manager.group_count += 1
             self._mark_join_target(
                 target_id,
                 'joined',
@@ -434,8 +433,8 @@ class TelegramCollector:
                 entity=entity,
                 monitored_chat_id=chat.id,
             )
-            if settings.telegram_live_listener_enabled and not self.handler_registered:
-                await self._register_handler(client)
+            if settings.telegram_live_listener_enabled and manager.account_key not in self._message_handlers:
+                await self._register_handler(manager, client)
             try:
                 await self._backfill_one(chat.telegram_id)
             except Exception as sync_exc:
@@ -451,13 +450,32 @@ class TelegramCollector:
         except Exception as exc:
             return await self._handle_join_error(target_id, exc)
 
+    async def _least_loaded_account(self):
+        with session_scope() as db:
+            counts = dict(db.execute(
+                select(MonitoredChat.telegram_account, func.count(MonitoredChat.id))
+                .where(MonitoredChat.telegram_account.is_not(None))
+                .group_by(MonitoredChat.telegram_account)
+            ).all())
+        for manager in sorted(
+            telegram_session_managers,
+            key=lambda item: item.group_count if item.group_count is not None else counts.get(item.account_key, 0),
+        ):
+            try:
+                client = await manager.connect()
+                if client:
+                    return manager, client
+            except Exception as exc:
+                logger.warning('join account unavailable account=%s: %s', manager.label, exc)
+        return None, None
+
     def _extract_chat_from_result(self, result):
         for item in getattr(result, 'chats', []) or []:
             if isinstance(item, (Channel, Chat)):
                 return item
         return None
 
-    def _activate_joined_chat(self, entity) -> MonitoredChat:
+    def _activate_joined_chat(self, entity, account_key: str) -> MonitoredChat:
         peer_id = utils.get_peer_id(entity)
         with session_scope() as db:
             chat = db.execute(select(MonitoredChat).where(MonitoredChat.telegram_id == peer_id)).scalar_one_or_none()
@@ -468,6 +486,7 @@ class TelegramCollector:
                     title=getattr(entity, 'title', getattr(entity, 'username', str(getattr(entity, 'id', peer_id)))),
                     username=getattr(entity, 'username', None),
                     chat_type=entity.__class__.__name__.lower(),
+                    telegram_account=account_key,
                     is_active=True,
                 )
                 db.add(chat)
@@ -477,6 +496,7 @@ class TelegramCollector:
                 chat.username = getattr(entity, 'username', chat.username)
                 chat.access_hash = getattr(entity, 'access_hash', chat.access_hash)
                 chat.chat_type = entity.__class__.__name__.lower()
+                chat.telegram_account = chat.telegram_account or account_key
                 chat.is_active = True
             db.expunge(chat)
             return chat
@@ -524,45 +544,51 @@ class TelegramCollector:
         return {'status': 'failed', 'target_id': target_id, 'reason': message}
 
     async def sync_dialogs(self) -> int:
-        client = await telegram_session_manager.connect()
-        if not client:
-            raise RuntimeError('telegram session unavailable')
         count = 0
-        async for dialog in client.iter_dialogs():
-            entity = dialog.entity
-            if not isinstance(entity, (Channel, Chat)):
-                continue
-            peer_id = utils.get_peer_id(entity)
-            persist_lock = self._persist_locks.setdefault(peer_id, asyncio.Lock())
-            async with persist_lock:
-                with session_scope() as db:
-                    chat = db.execute(select(MonitoredChat).where(MonitoredChat.telegram_id == peer_id)).scalar_one_or_none()
-                    if not chat:
-                        chat = MonitoredChat(
-                            telegram_id=peer_id,
-                            access_hash=getattr(entity, 'access_hash', None),
-                            title=getattr(entity, 'title', getattr(entity, 'username', str(entity.id))),
-                            username=getattr(entity, 'username', None),
-                            chat_type=entity.__class__.__name__.lower(),
-                            is_active=False,
-                        )
-                        db.add(chat)
-                        count += 1
-                    else:
-                        chat.title = getattr(entity, 'title', getattr(entity, 'username', chat.title))
-                        chat.username = getattr(entity, 'username', chat.username)
-                        chat.access_hash = getattr(entity, 'access_hash', chat.access_hash)
-                        chat.chat_type = entity.__class__.__name__.lower()
+        synced_accounts = 0
+        for manager in telegram_session_managers:
+            try:
+                client = await manager.connect()
+                if not client:
+                    continue
+                group_count = 0
+                async for dialog in client.iter_dialogs():
+                    entity = dialog.entity
+                    if not isinstance(entity, (Channel, Chat)):
+                        continue
+                    group_count += 1
+                    peer_id = utils.get_peer_id(entity)
+                    persist_lock = self._persist_locks.setdefault(peer_id, asyncio.Lock())
+                    async with persist_lock:
+                        with session_scope() as db:
+                            chat = db.execute(select(MonitoredChat).where(MonitoredChat.telegram_id == peer_id)).scalar_one_or_none()
+                            if not chat:
+                                chat = MonitoredChat(
+                                    telegram_id=peer_id,
+                                    access_hash=getattr(entity, 'access_hash', None),
+                                    title=getattr(entity, 'title', getattr(entity, 'username', str(entity.id))),
+                                    username=getattr(entity, 'username', None),
+                                    chat_type=entity.__class__.__name__.lower(),
+                                    telegram_account=manager.account_key,
+                                    is_active=False,
+                                )
+                                db.add(chat)
+                                count += 1
+                            else:
+                                chat.title = getattr(entity, 'title', getattr(entity, 'username', chat.title))
+                                chat.username = getattr(entity, 'username', chat.username)
+                                chat.access_hash = getattr(entity, 'access_hash', chat.access_hash)
+                                chat.chat_type = entity.__class__.__name__.lower()
+                                chat.telegram_account = chat.telegram_account or manager.account_key
+                manager.group_count = group_count
+                synced_accounts += 1
+            except Exception as exc:
+                logger.warning('dialog sync failed account=%s: %s', manager.label, exc)
+        if not synced_accounts:
+            raise RuntimeError('no Telegram account could synchronize dialogs')
         return count
 
     async def backfill_all_active_chats(self) -> None:
-        try:
-            client = await telegram_session_manager.connect()
-        except Exception as exc:
-            logger.warning('backfill connect failed: %s', exc)
-            return
-        if not client:
-            return
         with session_scope() as db:
             chats = db.execute(select(MonitoredChat).where(MonitoredChat.is_active.is_(True))).scalars().all()
         for chat in chats:
@@ -581,7 +607,11 @@ class TelegramCollector:
             except (sqlite3.OperationalError, Exception) as exc:
                 logger.warning('backfill chat %s failed: %s', chat.telegram_id, exc)
                 if isinstance(exc, sqlite3.OperationalError) and 'database is locked' in str(exc):
-                    await telegram_session_manager._reset_session_file()
+                    try:
+                        manager = get_telegram_session_manager(chat.telegram_account or 0)
+                        await manager._reset_session_file()
+                    except ValueError:
+                        pass
                     await asyncio.sleep(2)
 
     async def _backfill_one(self, telegram_chat_id: int) -> int:
@@ -591,9 +621,6 @@ class TelegramCollector:
                 return await self.backfill_chat(telegram_chat_id, settings.sync_lookback_messages)
 
     async def backfill_chat(self, telegram_chat_id: int, limit: int = 1000) -> int:
-        client = await telegram_session_manager.connect()
-        if not client:
-            raise RuntimeError('telegram session unavailable')
         total = 0
         internal_chat_id: int | None = None
         run_id: int | None = None
@@ -604,10 +631,21 @@ class TelegramCollector:
                 raise RuntimeError('chat not found in monitored list')
             internal_chat_id = chat.id
             last_synced_message_id = chat.last_synced_message_id
+            account_key = chat.telegram_account
             run = SyncRun(chat_id=chat.id, run_type='backfill', status='running', started_at=datetime.utcnow())
             db.add(run)
             db.flush()
             run_id = run.id
+
+        try:
+            manager = get_telegram_session_manager(account_key or 0)
+            client = await manager.connect()
+        except Exception as exc:
+            self._mark_sync_failed(run_id, exc)
+            raise RuntimeError(f'Telegram account unavailable for chat {telegram_chat_id}: {exc}') from exc
+        if not client:
+            self._mark_sync_failed(run_id, RuntimeError('Telegram account unavailable'))
+            raise RuntimeError('Telegram account unavailable')
 
         try:
             entity = await client.get_entity(telegram_chat_id)
@@ -631,7 +669,7 @@ class TelegramCollector:
         except sqlite3.OperationalError as exc:
             if 'database is locked' in str(exc):
                 logger.warning('session locked during backfill chat %s, will retry later', telegram_chat_id)
-                await telegram_session_manager._reset_session_file()
+                await manager._reset_session_file()
             self._mark_sync_failed(run_id, exc)
             raise
         except asyncio.CancelledError:

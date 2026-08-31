@@ -63,10 +63,11 @@ _SCHEMA_TABLES: list[SchemaTable] = [
             SchemaColumn('title', 'VARCHAR(255)', False, '群/频道标题'),
             SchemaColumn('username', 'VARCHAR(255)', True, 't.me 用户名'),
             SchemaColumn('chat_type', 'VARCHAR(50)', False, "'group' | 'channel' | 'supergroup'"),
+            SchemaColumn('telegram_account', 'VARCHAR(500)', True, '负责采集该群的 Telegram Session'),
             SchemaColumn('is_active', 'BOOLEAN', False, '是否正在监控'),
             SchemaColumn('last_message_at', 'DATETIME', True, '最后一条消息时间'),
         ],
-        indexes=['id', 'telegram_id', 'title'],
+        indexes=['id', 'telegram_id', 'title', 'telegram_account'],
         notes='监控对象列表，所有消息都归属到某个 chat_id。',
     ),
     SchemaTable(

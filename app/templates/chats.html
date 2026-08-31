@@ -77,7 +77,7 @@
           <tr class="chat-row"
               data-active="{{ 'true' if chat.is_active else 'false' }}"
               data-chat-type="{{ chat.chat_type }}"
-              data-search="{{ (chat.title ~ ' ' ~ (chat.username or '') ~ ' ' ~ chat.telegram_id)|lower }}">
+              data-search="{{ (chat.title ~ ' ' ~ (chat.username or '') ~ ' ' ~ chat.telegram_id ~ ' ' ~ (chat.telegram_account or ''))|lower }}">
             <td><input type="checkbox" name="chat_ids" value="{{ chat.id }}" class="chat-checkbox" onchange="updateBatchBar()" style="accent-color: var(--primary);"></td>
             <td>
               <div class="chat-title-cell">
@@ -100,6 +100,7 @@
                     {% else %}
                     <span>ID: <code>{{ chat.telegram_id }}</code></span>
                     {% endif %}
+                    {% if chat.telegram_account %}<span> · <code>{{ chat.telegram_account.rsplit('/', 1)[-1] }}</code></span>{% endif %}
                   </div>
                 </div>
               </div>

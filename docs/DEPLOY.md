@@ -4,7 +4,7 @@
 
 - Python 3.11+
 - MySQL 5.7+ or 8.0+
-- A Telegram account for monitoring
+- One or more Telegram accounts for monitoring
 - (Optional) AI API key for summaries
 
 ---
@@ -35,6 +35,9 @@ python -m app.cli init-db
 
 # Telegram login (one-time)
 python -m app.cli manual-login --phone +8613xxxxxxxxx
+
+# Multiple accounts: set TELEGRAM_SESSION_PATHS, then log in each index
+# python -m app.cli manual-login --account 1 --phone +8615xxxxxxxxx
 
 # Sync groups
 python -m app.cli sync-dialogs

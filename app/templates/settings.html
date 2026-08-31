@@ -29,11 +29,9 @@
     <div class="value small">
       <span class="status-dot {{ 'online' if telegram_connected else 'offline' }}"></span>
       {{ t('settings.connected') if telegram_connected else t('settings.disconnected') }}
-      {% if me %}
       <div style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
-        {{ me.id }}{% if me.username %} / @{{ me.username }}{% endif %}{% if me.first_name %} / {{ me.first_name }}{% endif %}
+        {{ telegram_connected_count }} / {{ telegram_accounts|length }} {{ t('settings.accounts') }}
       </div>
-      {% endif %}
     </div>
   </div>
   <div class="card">
@@ -71,15 +69,18 @@
     <h3>{{ t('settings.telegram_login') }}</h3>
   </div>
   <div class="settings-section-body">
+    <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 16px;">
+      {{ t('settings.login_desc') }}
+    </p>
+    {% for telegram_account in telegram_accounts %}
     <div class="grid-2" style="margin-bottom: 0;">
       <div>
-        <p style="color: var(--text-secondary); font-size: 13px; margin: 0 0 16px;">
-          {{ t('settings.login_desc') }}
-        </p>
+        <div class="info-card-title">{{ t('settings.account') }} {{ telegram_account.index + 1 }} · {{ telegram_account.label }}</div>
         <form action="/settings/manual-login" method="post" class="form-vertical">
+          <input type="hidden" name="account" value="{{ telegram_account.index }}">
           <div class="form-group">
             <label>{{ t('settings.phone_number') }}</label>
-            <input type="text" name="phone" placeholder="+8613xxxxxxxxx" value="{{ pending_manual_login_phone or '' }}" required>
+            <input type="text" name="phone" placeholder="+8613xxxxxxxxx" value="{{ telegram_account.pending_phone or '' }}" required>
           </div>
           <div class="form-group">
             <label>{{ t('settings.verification_code') }}</label>
@@ -92,7 +93,7 @@
           <div class="form-actions" style="border-top: none; padding-top: 4px;">
             <button class="btn btn-primary" type="submit">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-              {{ t('settings.submit_code') if pending_manual_login_phone else t('settings.send_code') }}
+              {{ t('settings.submit_code') if telegram_account.pending_phone else t('settings.send_code') }}
             </button>
           </div>
         </form>
@@ -101,14 +102,29 @@
         <div class="info-card">
           <div class="info-card-title">{{ t('settings.connection_info') }}</div>
           <div class="form-vertical" style="gap: 10px;">
+            <div class="info-badge-row">
+              <span class="info-label">{{ t('settings.telegram_status') }}</span>
+              <span class="badge {{ 'badge-green' if telegram_account.connected else 'badge-red' }}">{{ t('settings.connected') if telegram_account.connected else t('settings.disconnected') }}</span>
+            </div>
+            {% if telegram_account.me %}
+            <div class="info-row">
+              <span class="info-label">Telegram</span>
+              <span class="info-value">{{ telegram_account.me.id }}{% if telegram_account.me.username %} / @{{ telegram_account.me.username }}{% endif %}{% if telegram_account.me.first_name %} / {{ telegram_account.me.first_name }}{% endif %}</span>
+            </div>
+            {% endif %}
             <div class="info-row">
               <span class="info-label">{{ t('settings.session_path') }}</span>
-              <code class="info-value" style="font-size: 11px;">{{ session_path }}</code>
+              <code class="info-value" style="font-size: 11px;">{{ telegram_account.session_path }}</code>
             </div>
+            {% if loop.first %}
             <div class="info-row">
               <span class="info-label">{{ t('settings.tdata_path') }}</span>
               <code class="info-value" style="font-size: 11px;">{{ tdata_path }}</code>
             </div>
+            {% endif %}
+            {% if telegram_account.group_count is not none %}
+            <div class="info-row"><span class="info-label">{{ t('settings.groups') }}</span><span class="info-value">{{ telegram_account.group_count }}</span></div>
+            {% endif %}
             <div class="info-badge-row">
               <span class="info-label">{{ t('settings.api_id') }}</span>
               <span class="badge {{ 'badge-green' if api_id_present else 'badge-red' }}">{{ t('settings.configured') if api_id_present else t('settings.not_configured') }}</span>
@@ -121,6 +137,8 @@
         </div>
       </div>
     </div>
+    {% if not loop.last %}<hr style="margin: 24px 0; border-color: var(--border);">{% endif %}
+    {% endfor %}
   </div>
 </div>
 

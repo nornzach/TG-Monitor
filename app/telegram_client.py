@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import socks
 from telethon import TelegramClient
@@ -20,7 +21,11 @@ class UnsafeTelegramSessionError(RuntimeError):
 
 
 class TelegramSessionManager:
-    def __init__(self) -> None:
+    def __init__(self, session_path: Path | None = None) -> None:
+        self.session_path = session_path or settings.resolved_session_path
+        self.account_key = str(self.session_path)
+        self.label = self.session_path.name
+        self.group_count: int | None = None
         self.client: TelegramClient | None = None
         self._lock = asyncio.Lock()
         self._manual_login_client: TelegramClient | None = None
@@ -58,7 +63,7 @@ class TelegramSessionManager:
             self.client = None
 
     async def _reset_session_file(self) -> None:
-        session_path = settings.resolved_session_path
+        session_path = self.session_path
         for p in [session_path,
                   session_path.parent / f'{session_path.name}-journal',
                   session_path.parent / f'{session_path.name}-wal',
@@ -80,7 +85,9 @@ class TelegramSessionManager:
         await self._acquire_lock('connect telegram session')
         try:
             if self.client and await self._wait_for_maybe(self.client.is_connected(), operation='check existing client connection'):
-                return self.client
+                desired_no_updates = not settings.telegram_live_listener_enabled
+                if getattr(self.client, '_no_updates', desired_no_updates) == desired_no_updates:
+                    return self.client
 
             await self._disconnect_existing()
 
@@ -118,7 +125,7 @@ class TelegramSessionManager:
             self._lock.release()
 
     async def _try_existing_session(self) -> TelegramClient | None:
-        if not settings.resolved_session_path.exists():
+        if not self.session_path.exists():
             return None
         self._assert_session_safe_to_reuse()
 
@@ -136,10 +143,10 @@ class TelegramSessionManager:
                 return None
 
         client = TelegramClient(
-            str(settings.resolved_session_path),
+            str(self.session_path),
             api_id=api_id,
             api_hash=api_hash,
-            receive_updates=False,
+            receive_updates=settings.telegram_live_listener_enabled,
             proxy=self._proxy(),
             timeout=self._client_timeout(),
         )
@@ -163,7 +170,7 @@ class TelegramSessionManager:
         if settings.telegram_desktop_import_mode != 'create_new':
             raise UnsafeTelegramSessionError('refusing to import Telegram Desktop with shared use_current mode')
 
-        settings.resolved_session_path.parent.mkdir(parents=True, exist_ok=True)
+        self.session_path.parent.mkdir(parents=True, exist_ok=True)
         candidates = [settings.resolved_tdata_path]
         if settings.resolved_tdata_path.name != 'tdata':
             candidates.append(settings.resolved_tdata_path / 'tdata')
@@ -177,7 +184,7 @@ class TelegramSessionManager:
                 kwargs = {} if keyfile is None else {'keyFile': keyfile}
                 try:
                     tdesktop = TDesktop(str(candidate), **kwargs)
-                    client = await tdesktop.ToTelethon(str(settings.resolved_session_path), CreateNewSession)
+                    client = await tdesktop.ToTelethon(str(self.session_path), CreateNewSession)
                     try:
                         await self._wait_for_telegram_io(client.connect(), operation='connect imported desktop session')
                         if not await self._wait_for_maybe(client.is_user_authorized(), operation='check imported desktop session authorization'):
@@ -209,12 +216,12 @@ class TelegramSessionManager:
             await self._disconnect_existing()
             await self._disconnect_pending_manual_login()
             api_id, api_hash = self._resolve_api_credentials()
-            settings.resolved_session_path.parent.mkdir(parents=True, exist_ok=True)
+            self.session_path.parent.mkdir(parents=True, exist_ok=True)
             client = TelegramClient(
-                str(settings.resolved_session_path),
+                str(self.session_path),
                 api_id=api_id,
                 api_hash=api_hash,
-                receive_updates=False,
+                receive_updates=settings.telegram_live_listener_enabled,
                 proxy=self._proxy(),
                 timeout=self._client_timeout(),
             )
@@ -323,8 +330,13 @@ class TelegramSessionManager:
         return api_id, api_hash
 
     def _session_metadata_path(self):
-        session_path = settings.resolved_session_path
+        session_path = self.session_path
         return session_path.parent / f'{session_path.name}.meta.json'
+
+    async def disconnect(self) -> None:
+        async with self._lock:
+            await self._disconnect_existing()
+            await self._disconnect_pending_manual_login()
 
     def _read_session_metadata(self) -> dict | None:
         path = self._session_metadata_path()
@@ -368,4 +380,23 @@ class TelegramSessionManager:
             encoding='utf-8',
         )
 
-telegram_session_manager = TelegramSessionManager()
+telegram_session_managers = [TelegramSessionManager(path) for path in settings.resolved_session_paths]
+telegram_session_manager = telegram_session_managers[0]
+
+
+def get_telegram_session_manager(account: int | str = 0) -> TelegramSessionManager:
+    if isinstance(account, str) and not account.isdigit():
+        for manager in telegram_session_managers:
+            if manager.account_key == account:
+                return manager
+        matching_labels = [manager for manager in telegram_session_managers if manager.label == Path(account).name]
+        if len(matching_labels) == 1:
+            return matching_labels[0]
+        raise ValueError(f'unknown Telegram account: {account}')
+    try:
+        index = int(account)
+        if index < 0:
+            raise IndexError
+        return telegram_session_managers[index]
+    except (TypeError, ValueError, IndexError) as exc:
+        raise ValueError(f'invalid Telegram account index: {account}') from exc

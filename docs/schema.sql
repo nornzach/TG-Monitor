@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS `monitored_chats` (
   `title`                   VARCHAR(255) NOT NULL,
   `username`                VARCHAR(255) DEFAULT NULL,
   `chat_type`               VARCHAR(50)  NOT NULL DEFAULT 'unknown',
+  `telegram_account`        VARCHAR(500) DEFAULT NULL,
   `is_active`               TINYINT(1)   NOT NULL DEFAULT 1,
   `last_synced_message_id`  INT          DEFAULT NULL,
   `last_message_at`         DATETIME     DEFAULT NULL,
@@ -37,7 +38,8 @@ CREATE TABLE IF NOT EXISTS `monitored_chats` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_telegram_id` (`telegram_id`),
   KEY `idx_monitored_chats_title` (`title`),
-  KEY `idx_monitored_chats_username` (`username`)
+  KEY `idx_monitored_chats_username` (`username`),
+  KEY `ix_monitored_chats_telegram_account` (`telegram_account`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------

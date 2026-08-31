@@ -37,6 +37,7 @@ app.log
 
 # Test / dev scripts
 test_*.py
+!tests/test_telegram_accounts.py
 
 # OS
 .DS_Store

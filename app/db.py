@@ -33,6 +33,19 @@ def init_database() -> None:
 
 def ensure_runtime_indexes() -> None:
     inspector = inspect(engine)
+    if inspector.has_table('monitored_chats'):
+        chat_columns = {col['name'] for col in inspector.get_columns('monitored_chats')}
+        chat_indexes = {idx['name'] for idx in inspector.get_indexes('monitored_chats')}
+        statements = []
+        if 'telegram_account' not in chat_columns:
+            statements.append('ALTER TABLE monitored_chats ADD COLUMN telegram_account VARCHAR(500) NULL')
+        if 'ix_monitored_chats_telegram_account' not in chat_indexes:
+            statements.append('CREATE INDEX ix_monitored_chats_telegram_account ON monitored_chats (telegram_account)')
+        if statements:
+            with engine.begin() as conn:
+                for statement in statements:
+                    conn.execute(text(statement))
+
     if not inspector.has_table('messages') or not inspector.has_table('ai_summaries'):
         return
 

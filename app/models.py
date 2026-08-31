@@ -23,6 +23,7 @@ class MonitoredChat(Base):
     title: Mapped[str] = mapped_column(String(255), index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     chat_type: Mapped[str] = mapped_column(String(50), default='unknown')
+    telegram_account: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_synced_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
