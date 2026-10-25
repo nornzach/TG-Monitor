@@ -1194,7 +1194,12 @@ async def run_key_lead_analysis_once(batch_size: int | None = None) -> dict:
         db.close()
 
 
-async def run_summary_for_chat(chat_id: int) -> None:
+async def run_summary_for_chat(
+    chat_id: int,
+    *,
+    min_messages: int | None = None,
+    batch_size: int | None = None,
+) -> None:
     db = SessionLocal()
     summary_id: int | None = None
     try:
@@ -1227,11 +1232,17 @@ async def run_summary_for_chat(chat_id: int) -> None:
         last_msg_id = last.end_message_id if last else 0
 
         if settings.ai_summary_slide_window_enabled:
-            batch = settings.ai_summary_slide_window_size
-            min_required = min(settings.ai_summary_min_batch_size, batch)
+            default_batch = settings.ai_summary_slide_window_size
+            default_min = min(settings.ai_summary_min_batch_size, default_batch)
         else:
-            batch = settings.ai_summary_batch_size
-            min_required = settings.ai_summary_batch_size
+            default_batch = settings.ai_summary_batch_size
+            default_min = settings.ai_summary_batch_size
+
+        # Scheduled runs pass explicit values so a small backlog still gets
+        # summarised instead of waiting for the normal threshold.
+        batch = max(int(batch_size), 1) if batch_size else default_batch
+        min_required = max(int(min_messages), 1) if min_messages is not None else default_min
+        min_required = min(min_required, batch)
 
         msgs = db.query(Message).filter(
             Message.chat_id == chat_id,

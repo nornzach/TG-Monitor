@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from tzlocal import get_localzone
 
 from telethon import events, utils
 from telethon.errors import RPCError
@@ -36,6 +37,30 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
+# The scheduler runs in UTC, but the summarising window is wall-clock time in
+# the user's own timezone (18:01 means 18:01 locally).
+LOCAL_TIMEZONE = get_localzone()
+
+
+def in_active_summary_window(now: datetime | None = None) -> bool:
+    """True when AI summaries are allowed right now.
+
+    The window may wrap past midnight (18:01 -> 08:30). Disabled mode always
+    returns True so the plain batch-threshold behaviour applies.
+    """
+    if not settings.ai_summary_active_hours_enabled:
+        return True
+
+    current = (now or datetime.now()).time().replace(second=0, microsecond=0)
+    start_hour, start_minute = settings.ai_summary_active_start_hm
+    end_hour, end_minute = settings.ai_summary_active_end_hm
+    start = time(start_hour, start_minute)
+    end = time(end_hour, end_minute)
+
+    if start <= end:
+        return start <= current < end
+    return current >= start or current < end
+
 
 class TelegramCollector:
     def __init__(self) -> None:
@@ -47,6 +72,7 @@ class TelegramCollector:
         self._backfill_locks: dict[int, asyncio.Lock] = {}
         self._persist_locks: dict[int, asyncio.Lock] = {}
         self._summary_locks: dict[int, asyncio.Lock] = {}
+        self._summary_queue_lock = asyncio.Lock()
         self._join_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -148,6 +174,8 @@ class TelegramCollector:
             replace_existing=True,
             max_instances=1,
         )
+
+        self._configure_summary_window()
 
         if self.scheduler.get_jobs():
             self.scheduler.start()
@@ -308,6 +336,8 @@ class TelegramCollector:
                     self.scheduler.remove_job('telegram_join_queue')
                 except Exception:
                     pass
+
+        self._configure_summary_window()
 
         if not self.scheduler.running and self.scheduler.get_jobs():
             self.scheduler.start()
@@ -1048,7 +1078,123 @@ class TelegramCollector:
                 logger.warning('profile URL discovery failed chat=%s: %s', about_urls_chat_id, exc)
 
 
+    def _configure_summary_window(self) -> None:
+        """(Re)register the backlog drain that opens the daily active window."""
+        job_id = 'ai_summary_drain'
+        if not settings.ai_summary_active_hours_enabled:
+            if self.scheduler.get_job(job_id) is not None:
+                try:
+                    self.scheduler.remove_job(job_id)
+                except Exception:
+                    logger.warning('failed to remove AI summary drain job', exc_info=True)
+            return
+
+        hour, minute = settings.ai_summary_active_start_hm
+        self.scheduler.add_job(
+            self.drain_summary_backlog,
+            'cron',
+            hour=hour,
+            minute=minute,
+            timezone=LOCAL_TIMEZONE,
+            id=job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            # If the app was down at the window start, still drain within the hour.
+            misfire_grace_time=3600,
+        )
+        logger.info(
+            'AI summary active window %s-%s (%s); backlog drain at %02d:%02d',
+            settings.ai_summary_active_start,
+            settings.ai_summary_active_end,
+            LOCAL_TIMEZONE,
+            hour,
+            minute,
+        )
+
+    @staticmethod
+    def _pending_message_count(chat_id: int) -> int:
+        with session_scope() as db:
+            last_success = db.query(AiSummary).filter(
+                AiSummary.chat_id == chat_id,
+                AiSummary.status == 'success',
+            ).order_by(AiSummary.id.desc()).first()
+            last_id = last_success.end_message_id if last_success and last_success.end_message_id else 0
+            return db.query(func.count(Message.id)).filter(
+                Message.chat_id == chat_id,
+                Message.id > last_id,
+            ).scalar() or 0
+
+    @staticmethod
+    def _chats_with_pending_messages() -> list[int]:
+        """Chats that still have unsummarised messages, oldest backlog first."""
+        with session_scope() as db:
+            last_success = (
+                db.query(
+                    AiSummary.chat_id.label('chat_id'),
+                    func.max(AiSummary.end_message_id).label('last_message_id'),
+                )
+                .filter(AiSummary.status == 'success')
+                .group_by(AiSummary.chat_id)
+                .subquery()
+            )
+            rows = (
+                db.query(Message.chat_id, func.min(Message.id).label('oldest_id'))
+                .outerjoin(last_success, last_success.c.chat_id == Message.chat_id)
+                .filter(Message.id > func.coalesce(last_success.c.last_message_id, 0))
+                .group_by(Message.chat_id)
+                .order_by(func.min(Message.id))
+                .all()
+            )
+            return [row[0] for row in rows]
+
+    async def drain_summary_backlog(self) -> None:
+        """Drain the summary backlog for every chat, one API call at a time."""
+        if not settings.ai_summary_active_hours_enabled:
+            return
+        if not in_active_summary_window():
+            logger.info('backlog drain skipped: outside the active summary window')
+            return
+        if self._summary_queue_lock.locked():
+            logger.info('backlog drain skipped: a previous run is still in progress')
+            return
+
+        batch_size = settings.ai_summary_active_batch_size or settings.ai_summary_batch_size
+        async with self._summary_queue_lock:
+            chat_ids = self._chats_with_pending_messages()
+            logger.info('backlog drain started: %d chat(s) with pending messages, batch=%d',
+                        len(chat_ids), batch_size)
+            processed = 0
+            for chat_id in chat_ids:
+                if not in_active_summary_window():
+                    logger.info('active window closed; stopping backlog drain')
+                    break
+                batches = 0
+                while True:
+                    pending = self._pending_message_count(chat_id)
+                    if pending <= 0:
+                        break
+                    await run_summary_for_chat(chat_id, min_messages=1, batch_size=batch_size)
+                    batches += 1
+                    remaining = self._pending_message_count(chat_id)
+                    if remaining >= pending:
+                        logger.warning(
+                            'backlog drain made no progress chat=%s pending=%d (missing API key, error, or locked row)',
+                            chat_id, pending,
+                        )
+                        break
+                    if settings.ai_summary_active_pause_seconds > 0:
+                        await asyncio.sleep(settings.ai_summary_active_pause_seconds)
+                if batches:
+                    processed += 1
+                    logger.info('backlog drain chat=%s batches=%d', chat_id, batches)
+            logger.info('backlog drain finished: chats=%d processed=%d', len(chat_ids), processed)
+
     async def _try_trigger_summary(self, chat_id: int) -> None:
+        # Outside the active window (and while a drain is running) messages just
+        # accumulate: no API call is made.
+        if not in_active_summary_window() or self._summary_queue_lock.locked():
+            return
         if chat_id not in self._summary_locks:
             self._summary_locks[chat_id] = asyncio.Lock()
         lock = self._summary_locks[chat_id]

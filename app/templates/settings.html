@@ -210,6 +210,25 @@
         </div>
       </div>
 
+      <div class="grid-3">
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" name="ai_summary_active_hours_enabled" value="true" {% if ai_summary_active_hours_enabled %}checked{% endif %}>
+            {{ t('settings.ai_summary_active_hours') }}
+          </label>
+          <span class="help-text">{{ t('settings.ai_summary_active_hours_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.ai_summary_active_start') }}</label>
+          <input type="time" name="ai_summary_active_start" value="{{ ai_summary_active_start }}">
+          <span class="help-text">{{ t('settings.ai_summary_active_time_desc') }}</span>
+        </div>
+        <div class="form-group">
+          <label>{{ t('settings.ai_summary_active_end') }}</label>
+          <input type="time" name="ai_summary_active_end" value="{{ ai_summary_active_end }}">
+        </div>
+      </div>
+
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
         <label class="checkbox-label">
           <input type="checkbox" name="url_classification_enabled" value="true" {% if url_classification_enabled %}checked{% endif %}>

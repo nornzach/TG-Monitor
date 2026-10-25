@@ -186,8 +186,18 @@ Select provider, enter API Key, adjust Base URL and model as needed.
 |----------|---------|-------------|
 | `AI_SUMMARY_BATCH_SIZE` | 1000 | Messages before triggering AI summary |
 | `AI_SUMMARY_RUNNING_TIMEOUT_MINUTES` | 30 | Running task timeout |
+| `AI_SUMMARY_ACTIVE_HOURS_ENABLED` | false | Only call the AI API inside the active-hours window |
+| `AI_SUMMARY_ACTIVE_START` | 18:01 | Window start (local time, may wrap past midnight) |
+| `AI_SUMMARY_ACTIVE_END` | 08:30 | Window end (local time) |
+| `AI_SUMMARY_ACTIVE_BATCH_SIZE` | 0 | Batch size while draining the backlog; `0` uses `AI_SUMMARY_BATCH_SIZE` |
+| `AI_SUMMARY_ACTIVE_PAUSE_SECONDS` | 3 | Pause between backlog batches |
 
 > AI API Key and model are stored in the database, configured via `/settings` page.
+
+When `AI_SUMMARY_ACTIVE_HOURS_ENABLED=true`, messages collected outside the
+window are only stored. When the window opens, a scheduled job drains the
+backlog chat by chat, one batch at a time (oldest backlog first); afterwards the
+normal batch-threshold behaviour applies until the window closes.
 
 ## Architecture
 
@@ -479,8 +489,17 @@ python main.py
 |------|--------|------|
 | `AI_SUMMARY_BATCH_SIZE` | 1000 | 触发 AI 摘要的消息数阈值 |
 | `AI_SUMMARY_RUNNING_TIMEOUT_MINUTES` | 30 | 运行中超时时间 |
+| `AI_SUMMARY_ACTIVE_HOURS_ENABLED` | false | 仅在该时段内调用 AI 接口 |
+| `AI_SUMMARY_ACTIVE_START` | 18:01 | 时段开始（本机时间，可跨午夜） |
+| `AI_SUMMARY_ACTIVE_END` | 08:30 | 时段结束（本机时间） |
+| `AI_SUMMARY_ACTIVE_BATCH_SIZE` | 0 | 清理积压时的批大小；`0` 表示沿用 `AI_SUMMARY_BATCH_SIZE` |
+| `AI_SUMMARY_ACTIVE_PAUSE_SECONDS` | 3 | 批次之间的间隔秒数 |
 
 > AI API Key 和模型存储在数据库中，通过 `/settings` 页面配置。
+
+开启 `AI_SUMMARY_ACTIVE_HOURS_ENABLED` 后，时段外只入库不调用 AI；时段开始时
+自动按“积压最久优先”逐群、逐批清理，清理完成后恢复原有的按批大小触发，直到
+时段结束。
 
 ## 项目架构
 

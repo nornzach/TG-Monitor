@@ -1098,6 +1098,9 @@ async def settings_page(request: Request):
             'sync_lookback_messages': settings.sync_lookback_messages,
             'ai_summary_batch_size': settings.ai_summary_batch_size,
             'ai_summary_running_timeout_minutes': settings.ai_summary_running_timeout_minutes,
+            'ai_summary_active_hours_enabled': settings.ai_summary_active_hours_enabled,
+            'ai_summary_active_start': settings.ai_summary_active_start,
+            'ai_summary_active_end': settings.ai_summary_active_end,
             'url_classification_enabled': settings.url_classification_enabled,
             'url_classification_interval_minutes': settings.url_classification_interval_minutes,
             'url_classification_batch_size': settings.url_classification_batch_size,
@@ -1214,6 +1217,9 @@ async def save_runtime_config(
     sync_lookback_messages: int = Form(default=1000),
     ai_summary_batch_size: int = Form(default=1000),
     ai_summary_running_timeout_minutes: int = Form(default=30),
+    ai_summary_active_hours_enabled: bool = Form(default=False),
+    ai_summary_active_start: str = Form(default='18:01'),
+    ai_summary_active_end: str = Form(default='08:30'),
     url_classification_enabled: bool = Form(default=False),
     url_classification_interval_minutes: int = Form(default=30),
     url_classification_batch_size: int = Form(default=50),
@@ -1235,6 +1241,21 @@ async def save_runtime_config(
     key_lead_analysis_interval_minutes = min(max(key_lead_analysis_interval_minutes, 1), 1440)
     key_lead_analysis_batch_size = min(max(key_lead_analysis_batch_size, 1), 500)
 
+    def _normalize_hhmm(raw: str) -> str:
+        parts = (raw or '').strip().split(':')
+        if len(parts) != 2:
+            raise ValueError('bad time')
+        hour, minute = int(parts[0]), int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError('bad time')
+        return f'{hour:02d}:{minute:02d}'
+
+    try:
+        ai_summary_active_start = _normalize_hhmm(ai_summary_active_start)
+        ai_summary_active_end = _normalize_hhmm(ai_summary_active_end)
+    except ValueError:
+        return redirect_with_message('/settings', _t(request, 'settings.invalid_time'), 'error')
+
     _apply_settings({
         'telegram_desktop_import_mode': desktop_import_mode,
         'telegram_background_collection_enabled': background_collection_enabled,
@@ -1248,6 +1269,9 @@ async def save_runtime_config(
         'sync_lookback_messages': sync_lookback_messages,
         'ai_summary_batch_size': ai_summary_batch_size,
         'ai_summary_running_timeout_minutes': ai_summary_running_timeout_minutes,
+        'ai_summary_active_hours_enabled': ai_summary_active_hours_enabled,
+        'ai_summary_active_start': ai_summary_active_start,
+        'ai_summary_active_end': ai_summary_active_end,
         'url_classification_enabled': url_classification_enabled,
         'url_classification_interval_minutes': url_classification_interval_minutes,
         'url_classification_batch_size': url_classification_batch_size,
@@ -1268,6 +1292,9 @@ async def save_runtime_config(
         'SYNC_LOOKBACK_MESSAGES': str(sync_lookback_messages),
         'AI_SUMMARY_BATCH_SIZE': str(ai_summary_batch_size),
         'AI_SUMMARY_RUNNING_TIMEOUT_MINUTES': str(ai_summary_running_timeout_minutes),
+        'AI_SUMMARY_ACTIVE_HOURS_ENABLED': _env_bool(ai_summary_active_hours_enabled),
+        'AI_SUMMARY_ACTIVE_START': ai_summary_active_start,
+        'AI_SUMMARY_ACTIVE_END': ai_summary_active_end,
         'URL_CLASSIFICATION_ENABLED': _env_bool(url_classification_enabled),
         'URL_CLASSIFICATION_INTERVAL_MINUTES': str(url_classification_interval_minutes),
         'URL_CLASSIFICATION_BATCH_SIZE': str(url_classification_batch_size),

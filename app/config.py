@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     ai_summary_slide_window_enabled: bool = True
     ai_summary_slide_window_size: int = 100
     ai_summary_min_trigger_interval_minutes: int = 5
+    # Active-hours mode: AI summaries only run inside this local-time window
+    # (it may wrap past midnight). During the rest of the day messages pile up
+    # and no API call is made; when the window opens the backlog is drained in
+    # order and the normal batch-threshold logic takes over.
+    ai_summary_active_hours_enabled: bool = False
+    ai_summary_active_start: str = '18:01'
+    ai_summary_active_end: str = '08:30'
+    # 0 keeps the normal batch size (slide window / AI_SUMMARY_BATCH_SIZE).
+    ai_summary_active_batch_size: int = 0
+    ai_summary_active_pause_seconds: float = 3.0
     url_classification_enabled: bool = True
     url_classification_interval_minutes: int = 30
     url_classification_batch_size: int = 50
@@ -90,6 +100,31 @@ class Settings(BaseSettings):
     @classmethod
     def validate_desktop_import_mode(cls, value: str) -> str:
         return 'create_new'
+
+    @field_validator('ai_summary_active_start', 'ai_summary_active_end')
+    @classmethod
+    def validate_active_hours(cls, value: str) -> str:
+        raw = (value or '').strip()
+        parts = raw.split(':')
+        if len(parts) != 2:
+            raise ValueError('active hours must look like 18:01 (24h HH:MM)')
+        try:
+            hour, minute = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ValueError('active hours must look like 18:01 (24h HH:MM)') from exc
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError('active hours must be between 00:00 and 23:59')
+        return f'{hour:02d}:{minute:02d}'
+
+    @property
+    def ai_summary_active_start_hm(self) -> tuple[int, int]:
+        hour, minute = self.ai_summary_active_start.split(':', 1)
+        return int(hour), int(minute)
+
+    @property
+    def ai_summary_active_end_hm(self) -> tuple[int, int]:
+        hour, minute = self.ai_summary_active_end.split(':', 1)
+        return int(hour), int(minute)
 
     @property
     def sqlalchemy_url(self) -> URL:
